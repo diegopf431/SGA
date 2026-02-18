@@ -16,9 +16,7 @@ st.set_page_config(
 )
 
 # --- NOMBRES DE ARCHIVOS (Deben estar en el repo de GitHub) ---
-# Archivo generado por el transformador
 DATA_FILENAME = "data_sga_source.xlsx" 
-# Archivo de presupuesto original
 BUDGET_FILENAME = "2025 10 13 - SGA MOD - V31 - send 1.xlsx" 
 
 # --- COLORES ---
@@ -51,7 +49,7 @@ def normalizar_denom3(texto):
     return t
 
 # ==============================================================================
-# 2. CARGA DE DATOS (LECTURA EXCEL DIRECTA)
+# 2. CARGA DE DATOS
 # ==============================================================================
 @st.cache_data
 def load_data_from_excel(filename):
@@ -59,26 +57,15 @@ def load_data_from_excel(filename):
         return None, f"⚠️ No se encuentra el archivo: {filename}"
 
     try:
-        # Leemos el Excel generado por el transformador
         df = pd.read_excel(filename, sheet_name='BD_EERR')
-        
-        # Procesamiento de Fechas (formato Access suele ser 2024.01)
         df['Fecha_Str'] = df['Year/month'].astype(str).str.replace('.', '/', regex=False)
         df['Fecha'] = pd.to_datetime(df['Fecha_Str'], errors='coerce')
-        # Forzar día 1
         df['Fecha'] = df['Fecha'].apply(lambda x: x.replace(day=1) if pd.notnull(x) else x)
         df = df.dropna(subset=['Fecha'])
-
-        # Normalización
         df['Concepto_Norm'] = df['Denom3'].apply(normalizar_denom3)
-        
-        # Signo
-        DISPLAY_SIGN = 1 
-        df['Gasto_Real'] = df['Valor'] * DISPLAY_SIGN
-
+        df['Gasto_Real'] = df['Valor'] * 1 # Ajustar signo si es necesario
         df = df.sort_values('Fecha')
         return df, "Datos cargados correctamente."
-        
     except Exception as e:
         return None, f"Error leyendo Excel de Datos: {e}"
 
@@ -90,7 +77,6 @@ def load_budget_excel(filename):
         df_ex = pd.read_excel(filename, header=5)
         col_ceco_name = df_ex.columns[1]
         df_ex = df_ex.dropna(subset=[col_ceco_name])
-        
         if len(df_ex.columns) < 3: return pd.DataFrame()
 
         all_cols = df_ex.columns[2:]
@@ -110,7 +96,7 @@ def load_budget_excel(filename):
         return pd.DataFrame(columns=['Desc_Ceco', 'Concepto_Norm', 'Budget_Anual'])
 
 # ==============================================================================
-# 3. GRÁFICOS (COMPACTO)
+# 3. GRÁFICOS
 # ==============================================================================
 def plot_waterfall_generic(labels, wf_values, wf_measures, bar_values, title, is_drilldown=False, simple_bar_mode=False, bar_custom_text=None, val_prior_year=None, label_prior_year="Año Ant"):
     fig = go.Figure()
@@ -228,25 +214,49 @@ def main():
         c3.metric("Var vs Bud", f"{(tot_r-tot_b)/tot_b*100:+.1f}%" if tot_b else "0%", delta_color="inverse")
         c4.metric(f"Vs {sel_year-1}", f"{(tot_r-tot_p)/tot_p*100:+.1f}%" if tot_p else "0%", f"{tot_r-tot_p:+,.0f}", delta_color="inverse")
 
+        # GRAFICO PRINCIPAL
         sel = st.plotly_chart(plot_waterfall_generic(lbls, vals, meas, bar_v, f"Waterfall {lbl}", False, False, bar_t, tot_p, f"Real {sel_year-1}"), use_container_width=True, on_select="rerun")
         
-        # DRILL DOWN LOGIC (Simplificada)
+        # --- LOGICA DE DRILL DOWN (CORREGIDA) ---
         clk = sel["selection"]["points"][0]["x"] if sel and sel["selection"]["points"] else None
-        if clk and clk not in ["Budget Total", "Total Real", f"Real {sel_year-1}"]:
-            st.markdown(f"--- \n ### Detalle: {clk}")
-            df_c_r = df_f[df_f['Desc_Ceco']==clk]
-            df_c_b = df_bud[df_bud['Desc_Ceco']==clk]
-            grp_r = df_c_r.groupby('Concepto_Norm')['Gasto_Real'].sum()
-            grp_b = df_c_b.groupby('Concepto_Norm')['Budget_Anual'].sum() * factor
-            
-            d_lbls, d_vals, d_meas, d_bar = ["Budget"], [grp_b.sum()], ["absolute"], [grp_b.sum()]
-            for concept in sorted(list(set(grp_r.index)|set(grp_b.index))):
-                vr, vb = grp_r.get(concept,0), grp_b.get(concept,0)
-                if abs(vr-vb)>1:
-                    d_lbls.append(concept); d_vals.append(vr-vb); d_meas.append("relative"); d_bar.append(vr)
-            d_lbls.append("Real"); d_vals.append(grp_r.sum()); d_meas.append("total"); d_bar.append(grp_r.sum())
-            
-            st.plotly_chart(plot_waterfall_generic(d_lbls, d_vals, d_meas, d_bar, f"Detalle {clk}", True), use_container_width=True)
+        
+        if clk:
+            # 1. CASO GLOBAL: Si el click es en "Total Real", hacemos zoom global
+            if clk == "Total Real":
+                st.markdown(f"--- \n ### 🌎 Zoom Global: Desglose por Concepto")
+                
+                # Agrupamos por concepto sin importar el CeCo
+                grp_r = df_f.groupby('Concepto_Norm')['Gasto_Real'].sum()
+                grp_b = df_bud.groupby('Concepto_Norm')['Budget_Anual'].sum() * factor
+                
+                d_lbls, d_vals, d_meas, d_bar = ["Budget Global"], [grp_b.sum()], ["absolute"], [grp_b.sum()]
+                
+                for concept in sorted(list(set(grp_r.index)|set(grp_b.index))):
+                    vr, vb = grp_r.get(concept,0), grp_b.get(concept,0)
+                    if abs(vr-vb)>1:
+                        d_lbls.append(concept); d_vals.append(vr-vb); d_meas.append("relative"); d_bar.append(vr)
+                        
+                d_lbls.append("Total Real"); d_vals.append(grp_r.sum()); d_meas.append("total"); d_bar.append(grp_r.sum())
+                
+                st.plotly_chart(plot_waterfall_generic(d_lbls, d_vals, d_meas, d_bar, f"Variación Global vs Budget ({lbl})", True), use_container_width=True)
+
+            # 2. CASO CECO ESPECIFICO: Si el click NO es en "Total Real" ni en las barras de referencia
+            elif clk not in ["Budget Total", f"Real {sel_year-1}"]:
+                st.markdown(f"--- \n ### 🔎 Detalle: {clk}")
+                df_c_r = df_f[df_f['Desc_Ceco']==clk]
+                df_c_b = df_bud[df_bud['Desc_Ceco']==clk]
+                
+                grp_r = df_c_r.groupby('Concepto_Norm')['Gasto_Real'].sum()
+                grp_b = df_c_b.groupby('Concepto_Norm')['Budget_Anual'].sum() * factor
+                
+                d_lbls, d_vals, d_meas, d_bar = ["Budget"], [grp_b.sum()], ["absolute"], [grp_b.sum()]
+                for concept in sorted(list(set(grp_r.index)|set(grp_b.index))):
+                    vr, vb = grp_r.get(concept,0), grp_b.get(concept,0)
+                    if abs(vr-vb)>1:
+                        d_lbls.append(concept); d_vals.append(vr-vb); d_meas.append("relative"); d_bar.append(vr)
+                d_lbls.append("Real"); d_vals.append(grp_r.sum()); d_meas.append("total"); d_bar.append(grp_r.sum())
+                
+                st.plotly_chart(plot_waterfall_generic(d_lbls, d_vals, d_meas, d_bar, f"Detalle {clk}", True), use_container_width=True)
 
     with tab2: st.plotly_chart(plot_mom_evolution(df, sel_year, df_bud['Budget_Anual'].sum()/12), use_container_width=True)
     with tab3: st.plotly_chart(plot_comparison_bars(df_f, df_fp, sel_year, sel_year-1, bud_ceco), use_container_width=True)
