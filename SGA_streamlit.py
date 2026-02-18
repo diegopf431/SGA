@@ -204,7 +204,7 @@ def main():
             lbl_bud_txt = "Exceso"
         
         # El delta combina el % absoluto + la palabra
-        delta_text_bud = f"{abs(pct_bud):.1f}% {lbl_bud_txt}"
+        delta_text_bud = f"{pct_bud:.1f}% {lbl_bud_txt}"
 
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Budget", f"${budget:,.0f}")
@@ -294,3 +294,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
