@@ -15,7 +15,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- NOMBRES DE ARCHIVOS (Deben estar en el repo de GitHub) ---
+# --- NOMBRES DE ARCHIVOS ---
 DATA_FILENAME = "data_sga_source.xlsx" 
 BUDGET_FILENAME = "2025 10 13 - SGA MOD - V31 - send 1.xlsx" 
 
@@ -63,7 +63,7 @@ def load_data_from_excel(filename):
         df['Fecha'] = df['Fecha'].apply(lambda x: x.replace(day=1) if pd.notnull(x) else x)
         df = df.dropna(subset=['Fecha'])
         df['Concepto_Norm'] = df['Denom3'].apply(normalizar_denom3)
-        df['Gasto_Real'] = df['Valor'] * 1 # Ajustar signo si es necesario
+        df['Gasto_Real'] = df['Valor'] * 1 
         df = df.sort_values('Fecha')
         return df, "Datos cargados correctamente."
     except Exception as e:
@@ -172,7 +172,7 @@ def main():
     months = sorted(df_y['Fecha'].dt.month.unique())
     if not months: st.warning("Sin datos este año."); return
 
-    m_names = {1:"Ene",2:"Feb",3:"Mar",4:"Abr",5:"May",6:"Jun",7:"Jul",8:"Ago",9:"Sep",10:"Oct",11:"Nov",12:"Dic"}
+    m_names = {1:"Ene", 2:"Feb", 3:"Mar", 4:"Abr", 5:"May", 6:"Jun", 7:"Jul", 8:"Ago", 9:"Sep", 10:"Oct", 11:"Nov", 12:"Dic"}
     sel_month = st.sidebar.selectbox("Mes Cierre", months, format_func=lambda x: f"{x}-{m_names[x]}", index=len(months)-1)
     view = st.sidebar.radio("Vista", ["MTD", "YTD"], horizontal=True)
     
@@ -190,6 +190,21 @@ def main():
 
     bud_ceco = df_bud.groupby('Desc_Ceco')['Budget_Anual'].sum() * factor
     
+    # --- HELPER PARA MOSTRAR KPIS REPETIDOS ---
+    def mostrar_kpis(budget, real, prior, prior_label):
+        diff_bud = real - budget
+        pct_bud = (diff_bud / budget * 100) if budget else 0
+        diff_prior = real - prior
+        pct_prior = (diff_prior / prior * 100) if prior else 0
+        
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Budget", f"${budget:,.0f}")
+        # Real muestra la diferencia absoluta vs Budget como delta estándar
+        c2.metric("Real", f"${real:,.0f}", f"{diff_bud:+,.0f}", delta_color="inverse")
+        # AQUI AGREGAMOS LA "BURBUJA" (DELTA) AL INDICADOR PORCENTUAL
+        c3.metric("Var vs Bud (%)", f"{pct_bud:+.1f}%", f"{diff_bud:+,.0f}", delta_color="inverse")
+        c4.metric(f"Vs {prior_label}", f"{pct_prior:+.1f}%", f"{diff_prior:+,.0f}", delta_color="inverse")
+
     tab1, tab2, tab3 = st.tabs(["Waterfall", "Evolución", "Comparativa"])
     
     with tab1:
@@ -208,24 +223,23 @@ def main():
         lbls.append("Total Real"); vals.append(tot_r); meas.append("total"); bar_v.append(tot_r); bar_t.append(f"${tot_r:,.0f}")
         
         st.subheader(f"Variación {lbl}")
-        c1,c2,c3,c4 = st.columns(4)
-        c1.metric("Budget", f"${tot_b:,.0f}")
-        c2.metric("Real", f"${tot_r:,.0f}", f"{tot_r-tot_b:+,.0f}", delta_color="inverse")
-        c3.metric("Var vs Bud", f"{(tot_r-tot_b)/tot_b*100:+.1f}%" if tot_b else "0%", delta_color="inverse")
-        c4.metric(f"Vs {sel_year-1}", f"{(tot_r-tot_p)/tot_p*100:+.1f}%" if tot_p else "0%", f"{tot_r-tot_p:+,.0f}", delta_color="inverse")
+        
+        # 1. MOSTRAR KPIS PRINCIPALES
+        mostrar_kpis(tot_b, tot_r, tot_p, str(sel_year-1))
 
         # GRAFICO PRINCIPAL
         sel = st.plotly_chart(plot_waterfall_generic(lbls, vals, meas, bar_v, f"Waterfall {lbl}", False, False, bar_t, tot_p, f"Real {sel_year-1}"), use_container_width=True, on_select="rerun")
         
-        # --- LOGICA DE DRILL DOWN (CORREGIDA) ---
+        # --- LOGICA DE DRILL DOWN ---
         clk = sel["selection"]["points"][0]["x"] if sel and sel["selection"]["points"] else None
         
         if clk:
-            # 1. CASO GLOBAL: Si el click es en "Total Real", hacemos zoom global
             if clk == "Total Real":
                 st.markdown(f"--- \n ### 🌎 Zoom Global: Desglose por Concepto")
                 
-                # Agrupamos por concepto sin importar el CeCo
+                # En vista global, los totales son los mismos que en la vista principal
+                mostrar_kpis(tot_b, tot_r, tot_p, str(sel_year-1))
+
                 grp_r = df_f.groupby('Concepto_Norm')['Gasto_Real'].sum()
                 grp_b = df_bud.groupby('Concepto_Norm')['Budget_Anual'].sum() * factor
                 
@@ -240,11 +254,19 @@ def main():
                 
                 st.plotly_chart(plot_waterfall_generic(d_lbls, d_vals, d_meas, d_bar, f"Variación Global vs Budget ({lbl})", True), use_container_width=True)
 
-            # 2. CASO CECO ESPECIFICO: Si el click NO es en "Total Real" ni en las barras de referencia
             elif clk not in ["Budget Total", f"Real {sel_year-1}"]:
                 st.markdown(f"--- \n ### 🔎 Detalle: {clk}")
                 df_c_r = df_f[df_f['Desc_Ceco']==clk]
                 df_c_b = df_bud[df_bud['Desc_Ceco']==clk]
+                df_c_p = df_fp[df_fp['Desc_Ceco']==clk] # Filtramos el año anterior para este ceco
+                
+                # Calculamos totales específicos del CeCo
+                ceco_real = df_c_r['Gasto_Real'].sum()
+                ceco_bud = df_c_b['Budget_Anual'].sum() * factor
+                ceco_prior = df_c_p['Gasto_Real'].sum()
+                
+                # 2. MOSTRAR KPIS ESPECIFICOS DEL CECO
+                mostrar_kpis(ceco_bud, ceco_real, ceco_prior, str(sel_year-1))
                 
                 grp_r = df_c_r.groupby('Concepto_Norm')['Gasto_Real'].sum()
                 grp_b = df_c_b.groupby('Concepto_Norm')['Budget_Anual'].sum() * factor
