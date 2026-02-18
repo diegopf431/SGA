@@ -190,19 +190,29 @@ def main():
 
     bud_ceco = df_bud.groupby('Desc_Ceco')['Budget_Anual'].sum() * factor
     
-    # --- HELPER PARA MOSTRAR KPIS REPETIDOS ---
+    # --- HELPER PARA MOSTRAR KPIS (ACTUALIZADO CON TEXTO DE AHORRO/EXCESO) ---
     def mostrar_kpis(budget, real, prior, prior_label):
         diff_bud = real - budget
         pct_bud = (diff_bud / budget * 100) if budget else 0
         diff_prior = real - prior
         pct_prior = (diff_prior / prior * 100) if prior else 0
         
+        # LOGICA DE TEXTO PARA LA BURBUJA
+        if diff_bud < 0:
+            lbl_bud_txt = "Ahorro"
+        else:
+            lbl_bud_txt = "Exceso"
+        
+        # El delta combina el % absoluto + la palabra
+        delta_text_bud = f"{abs(pct_bud):.1f}% {lbl_bud_txt}"
+
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Budget", f"${budget:,.0f}")
-        # Real muestra la diferencia absoluta vs Budget como delta estándar
         c2.metric("Real", f"${real:,.0f}", f"{diff_bud:+,.0f}", delta_color="inverse")
-        # AQUI AGREGAMOS LA "BURBUJA" (DELTA) AL INDICADOR PORCENTUAL
-        c3.metric("Var vs Bud (%)", f"{pct_bud:+.1f}%", f"{diff_bud:+,.0f}", delta_color="inverse")
+        
+        # AQUI SE APLICA EL CAMBIO SOLICITADO
+        c3.metric("Var vs Bud", f"{pct_bud:+.1f}%", delta_text_bud, delta_color="inverse")
+        
         c4.metric(f"Vs {prior_label}", f"{pct_prior:+.1f}%", f"{diff_prior:+,.0f}", delta_color="inverse")
 
     tab1, tab2, tab3 = st.tabs(["Waterfall", "Evolución", "Comparativa"])
@@ -237,7 +247,7 @@ def main():
             if clk == "Total Real":
                 st.markdown(f"--- \n ### 🌎 Zoom Global: Desglose por Concepto")
                 
-                # En vista global, los totales son los mismos que en la vista principal
+                # En vista global, los totales son los mismos
                 mostrar_kpis(tot_b, tot_r, tot_p, str(sel_year-1))
 
                 grp_r = df_f.groupby('Concepto_Norm')['Gasto_Real'].sum()
@@ -258,9 +268,8 @@ def main():
                 st.markdown(f"--- \n ### 🔎 Detalle: {clk}")
                 df_c_r = df_f[df_f['Desc_Ceco']==clk]
                 df_c_b = df_bud[df_bud['Desc_Ceco']==clk]
-                df_c_p = df_fp[df_fp['Desc_Ceco']==clk] # Filtramos el año anterior para este ceco
+                df_c_p = df_fp[df_fp['Desc_Ceco']==clk] 
                 
-                # Calculamos totales específicos del CeCo
                 ceco_real = df_c_r['Gasto_Real'].sum()
                 ceco_bud = df_c_b['Budget_Anual'].sum() * factor
                 ceco_prior = df_c_p['Gasto_Real'].sum()
