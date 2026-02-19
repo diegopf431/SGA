@@ -97,19 +97,19 @@ def load_budget_excel(filename):
 
 @st.cache_data
 def load_responsable_mapping(filename):
-    """
-    Lee la pestaña 'Ceco' del Excel y devuelve un diccionario {Ceco: Responsable}.
-    """
     if not os.path.exists(filename):
         return {}
     try:
-        df_map = pd.read_excel(filename, sheet_name='Ceco')
-        # Limpiar para asegurar el cruce exacto
+        # CORRECCIÓN 1: Leemos específicamente las columnas B y C (índice 0 = fila 1)
+        df_map = pd.read_excel(filename, sheet_name='Ceco', header=0, usecols="B:C")
+        
+        # Renombramos explícitamente para evitar problemas con espacios en blanco ocultos en Excel
+        df_map.columns = ['Den Ceco', 'Agrup. Ceco']
+        
         df_map = df_map.dropna(subset=['Den Ceco', 'Agrup. Ceco'])
         df_map['Den Ceco'] = df_map['Den Ceco'].astype(str).str.upper().str.strip()
         df_map['Agrup. Ceco'] = df_map['Agrup. Ceco'].astype(str).str.upper().str.strip()
         
-        # Crear diccionario {Den Ceco : Agrup. Ceco}
         return dict(zip(df_map['Den Ceco'], df_map['Agrup. Ceco']))
     except Exception as e:
         st.error(f"Error cargando mapeo de responsables (Pestaña 'Ceco'): {e}")
@@ -223,8 +223,13 @@ def main():
         diff_prior = real - prior
         pct_prior = (diff_prior / prior * 100) if prior else 0
         
-        lbl_bud_txt = "Ahorro" if diff_bud < 0 else "Exceso"
-        delta_text_bud = f"{abs(pct_bud):.1f}% {lbl_bud_txt}"
+        # CORRECCIÓN 2: Incluimos el signo explicitamente para que Streamlit detecte bien el color con 'inverse'
+        if diff_bud < 0:
+            lbl_bud_txt = "Ahorro"
+            delta_text_bud = f"-{abs(pct_bud):.1f}% {lbl_bud_txt}"
+        else:
+            lbl_bud_txt = "Exceso"
+            delta_text_bud = f"+{abs(pct_bud):.1f}% {lbl_bud_txt}"
 
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Budget", f"${budget:,.0f}")
@@ -256,7 +261,6 @@ def main():
         st.subheader(f"Variación por Centro de Costo ({lbl})")
         mostrar_kpis(tot_b, tot_r, tot_p, str(sel_year-1))
 
-        # Agregamos "key" para evitar conflictos
         sel = st.plotly_chart(plot_waterfall_generic(lbls, vals, meas, bar_v, f"Waterfall CeCo {lbl}", False, False, bar_t, tot_p, f"Real {sel_year-1}"), use_container_width=True, on_select="rerun", key="wf_ceco_main")
         
         clk = sel["selection"]["points"][0]["x"] if sel and sel["selection"]["points"] else None
@@ -307,7 +311,6 @@ def main():
         act_resp = df_f.groupby('Responsable')['Gasto_Real'].sum()
         all_r = sorted(list(set(act_resp.index) | set(bud_resp.index)))
         
-        # Los totales globales son idénticos a los del Tab 1
         tot_b, tot_r, tot_p = bud_resp.sum(), act_resp.sum(), df_fp['Gasto_Real'].sum()
 
         lbls_r, vals_r, meas_r, bar_v_r, bar_t_r = ["Budget Total"], [tot_b], ["absolute"], [tot_b], [f"${tot_b:,.0f}"]
@@ -323,7 +326,6 @@ def main():
         st.subheader(f"Variación por Responsable (Agrupación CeCo) ({lbl})")
         mostrar_kpis(tot_b, tot_r, tot_p, str(sel_year-1))
 
-        # Agregamos "key" diferente
         sel_resp = st.plotly_chart(plot_waterfall_generic(lbls_r, vals_r, meas_r, bar_v_r, f"Waterfall Responsable {lbl}", False, False, bar_t_r, tot_p, f"Real {sel_year-1}"), use_container_width=True, on_select="rerun", key="wf_resp_main")
         
         clk_resp = sel_resp["selection"]["points"][0]["x"] if sel_resp and sel_resp["selection"]["points"] else None
