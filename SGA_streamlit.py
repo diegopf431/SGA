@@ -293,5 +293,6 @@ def main():
     with tab3: st.plotly_chart(plot_comparison_bars(df_f, df_fp, sel_year, sel_year-1, bud_ceco), use_container_width=True)
 
 if __name__ == "__main__":
-    main()main()
+    main()
+
 
