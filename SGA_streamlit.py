@@ -171,7 +171,7 @@ def load_ceco_mapping(excel_path):
         # Como en la base vienen abreviados, los conectamos a la fuerza con su agrupación
         excepciones = {
             "INT.TRANSP.CST": "Sales & CSR's",
-            "CUS.TRANS.CST": "Sales & CSR's",
+            "CUS.TRANSP.CST": "Sales & CSR's",
             "SELLING - OTHER DIR.": "Sales & CSR's",
             "SELLING - OTHER IND.": "Sales & CSR's"
         }
@@ -871,6 +871,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
