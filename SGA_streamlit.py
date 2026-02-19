@@ -4,7 +4,6 @@ import streamlit as st
 import datetime
 import numpy as np
 import os
-import re
 
 # ==============================================================================
 # CONFIGURACIÓN GENERAL
@@ -31,7 +30,7 @@ MOM_COLOR_CURR = '#003366'
 MOM_COLOR_BUD = '#F4D03F'
 
 # ==============================================================================
-# 1. FUNCIONES AUXILIARES Y DE NORMALIZACIÓN
+# 1. FUNCIONES AUXILIARES
 # ==============================================================================
 def normalizar_denom3(texto):
     if pd.isna(texto): return "OTROS"
@@ -49,17 +48,12 @@ def normalizar_denom3(texto):
     if any(x in t for x in ['OTHER']): return "OTHER"
     return t
 
-def normalize_for_match(text):
-    """
-    Elimina espacios y caracteres especiales para facilitar el match.
-    Ej: " Adm. Finanzas. " -> "ADMINANZAS"
-    """
+def get_first_word(text):
+    """Extrae la primera palabra de un texto y la convierte a mayúsculas."""
     if pd.isna(text): return ""
-    # Convertir a string y mayúsculas
-    t = str(text).upper()
-    # Mantener solo letras y números (elimina espacios, puntos, guiones...)
-    t = re.sub(r'[^A-Z0-9]', '', t)
-    return t
+    parts = str(text).strip().split()
+    if not parts: return ""
+    return parts[0].upper() # Ej: "G&A - Marketing" -> "G&A"
 
 # ==============================================================================
 # 2. CARGA DE DATOS
@@ -76,7 +70,6 @@ def load_data_from_excel(filename):
         df = df.dropna(subset=['Fecha'])
         df['Concepto_Norm'] = df['Denom3'].apply(normalizar_denom3)
         df['Gasto_Real'] = df['Valor'] * 1 
-        # Aseguramos que Desc_Ceco sea string limpio
         df['Desc_Ceco'] = df['Desc_Ceco'].astype(str).str.upper().str.strip()
         df = df.sort_values('Fecha')
         return df, "Datos cargados correctamente."
@@ -100,7 +93,6 @@ def load_budget_excel(filename):
         df_melt = df_melt.rename(columns={col_ceco_name: 'Desc_Ceco'})
         
         df_melt['Budget_Anual'] = pd.to_numeric(df_melt['Budget_Anual'], errors='coerce').fillna(0) * 1000
-        # Aseguramos que Desc_Ceco sea string limpio
         df_melt['Desc_Ceco'] = df_melt['Desc_Ceco'].astype(str).str.upper().str.strip()
         df_melt = df_melt[~df_melt['Desc_Ceco'].isin(['NAN', 'NONE', '', 'NAN'])]
         df_melt['Concepto_Norm'] = df_melt['Concepto_Raw'].apply(normalizar_denom3)
@@ -111,48 +103,38 @@ def load_budget_excel(filename):
         return pd.DataFrame(columns=['Desc_Ceco', 'Concepto_Norm', 'Budget_Anual'])
 
 @st.cache_data
-def create_smart_mapping(filename, target_cecos_list):
+def create_first_word_mapping(filename):
     """
-    Lee la hoja 'Ceco', normaliza los nombres de ambas fuentes y crea el mapa
-    {Desc_Ceco_Original : Responsable_Agrupado}.
+    Crea un diccionario donde la llave es la primera palabra de 'Den Ceco'
+    y el valor es el 'Agrup. Ceco' correspondiente.
     """
     if not os.path.exists(filename): return {}
     try:
-        # Leer hoja 'Ceco', columnas B (idx 1) y C (idx 2)
         df_map = pd.read_excel(filename, sheet_name='Ceco', header=0)
-        if len(df_map.columns) < 3: return {}
         
-        # Extraer columnas relevantes por posición y limpiar NAs
-        df_ref = df_map.iloc[:, [1, 2]].dropna()
-        col_den_ceco_excel = df_ref.columns[0]
-        col_responsable_excel = df_ref.columns[1]
+        cols = df_map.columns.astype(str).str.strip().str.upper()
+        df_map.columns = cols
+        
+        if 'DEN CECO' in cols and 'AGRUP. CECO' in cols:
+            col_key, col_val = 'DEN CECO', 'AGRUP. CECO'
+        elif len(cols) >= 3:
+            col_key, col_val = cols[1], cols[2]
+        else:
+            return {}
 
-        # 1. Crear clave normalizada en el Excel (la "huella digital")
-        df_ref['match_key'] = df_ref[col_den_ceco_excel].apply(normalize_for_match)
+        df_map = df_map.dropna(subset=[col_key, col_val])
         
-        # Crear diccionario de búsqueda: {Huella_Digital_Excel : Responsable_Excel}
-        # Usamos drop_duplicates para evitar errores si el Excel tiene CeCos repetidos
-        df_ref_unique = df_ref.drop_duplicates(subset=['match_key'])
-        lookup_dict = dict(zip(df_ref_unique['match_key'], df_ref_unique[col_responsable_excel]))
+        # Extraer la primera palabra
+        df_map['First_Word'] = df_map[col_key].apply(get_first_word)
         
-        final_mapping = {}
-        # 2. Iterar por los CeCos de nuestros datos (target_cecos_list)
-        for ceco_orig in target_cecos_list:
-            # Normalizar el CeCo de nuestros datos para buscar su huella
-            norm_target = normalize_for_match(ceco_orig)
-            
-            # Buscar la huella en el diccionario del Excel
-            found_resp = lookup_dict.get(norm_target)
-            
-            if found_resp:
-                # Si hay coincidencia, guardamos el mapeo: Nombre Original -> Responsable del Excel
-                final_mapping[ceco_orig] = str(found_resp).upper().strip()
-            # Si no se encuentra, no se agrega al mapa (luego se llenará con 'SIN ASIGNAR')
-
-        return final_mapping
+        # Eliminar duplicados para que quede una sola regla por primera palabra
+        df_unique = df_map.drop_duplicates(subset=['First_Word'])
+        
+        # Diccionario: { "G&A": "Responsable 1", "SELLING": "Responsable 2", ... }
+        return dict(zip(df_unique['First_Word'], df_unique[col_val].astype(str).str.upper().str.strip()))
 
     except Exception as e:
-        st.error(f"Error creando mapeo inteligente: {e}")
+        st.error(f"Error creando mapeo por primera palabra: {e}")
         return {}
 
 # ==============================================================================
@@ -217,7 +199,6 @@ def main():
     st.title("📉 Dashboard Control SGA")
     
     with st.spinner('Cargando datos y mapeos...'):
-        # 1. Cargar datos principales
         df, msg = load_data_from_excel(DATA_FILENAME)
         df_bud = load_budget_excel(BUDGET_FILENAME)
         
@@ -225,15 +206,8 @@ def main():
             st.error("Error cargando datos. Verifique los archivos.")
             return
             
-        # 2. Obtener lista única de todos los CeCos en nuestros datos
-        all_my_cecos = set(df['Desc_Ceco'].unique()) | set(df_bud['Desc_Ceco'].unique())
-        
-        # 3. Crear el mapa inteligente usando esa lista
-        dict_responsables_smart = create_smart_mapping(BUDGET_FILENAME, all_my_cecos)
-        
-        # 4. Aplicar el mapa a los dataframes. Los que no hagan match quedan como 'SIN ASIGNAR'
-        df['Responsable'] = df['Desc_Ceco'].map(dict_responsables_smart).fillna('SIN ASIGNAR')
-        df_bud['Responsable'] = df_bud['Desc_Ceco'].map(dict_responsables_smart).fillna('SIN ASIGNAR')
+        # Generar el diccionario {Primera_Palabra : Responsable}
+        dict_responsables = create_first_word_mapping(BUDGET_FILENAME)
 
     st.success(msg)
 
@@ -262,7 +236,15 @@ def main():
         factor = float(sel_month)/12.0
         lbl = f"YTD (Ene-{m_names[sel_month]})"
 
-    # Calcular budget total por CeCo (para el primer tab)
+    # --- FUNCIÓN PARA APLICAR EL MAPEO A LOS DATAFRAMES ---
+    def assign_responsable(ceco_name):
+        fw = get_first_word(ceco_name)
+        return dict_responsables.get(fw, 'SIN ASIGNAR')
+
+    df_f['Responsable'] = df_f['Desc_Ceco'].apply(assign_responsable)
+    df_fp['Responsable'] = df_fp['Desc_Ceco'].apply(assign_responsable)
+    df_bud['Responsable'] = df_bud['Desc_Ceco'].apply(assign_responsable)
+
     bud_ceco = df_bud.groupby('Desc_Ceco')['Budget_Anual'].sum() * factor
     
     # --- HELPER PARA MOSTRAR KPIS ---
@@ -272,12 +254,9 @@ def main():
         diff_prior = real - prior
         pct_prior = (diff_prior / prior * 100) if prior else 0
         
-        if diff_bud < 0:
-            delta_text_bud = f"-{abs(pct_bud):.1f}% Ahorro"
-        elif diff_bud > 0:
-            delta_text_bud = f"+{abs(pct_bud):.1f}% Exceso"
-        else:
-            delta_text_bud = "0.0% Igual"
+        if diff_bud < 0: delta_text_bud = f"-{abs(pct_bud):.1f}% Ahorro"
+        elif diff_bud > 0: delta_text_bud = f"+{abs(pct_bud):.1f}% Exceso"
+        else: delta_text_bud = "0.0% Igual"
 
         if diff_prior < 0: delta_text_prior = f"-{abs(diff_prior):,.0f}"
         else: delta_text_prior = f"+{abs(diff_prior):,.0f}"
@@ -292,7 +271,7 @@ def main():
     tab_ceco, tab_resp, tab_evo, tab_comp = st.tabs(["Waterfall por CeCo", "Waterfall por Responsable", "Evolución", "Comparativa"])
     
     # ==============================================================================
-    # TAB 1: WATERFALL POR CECO (Sin cambios en lógica visual)
+    # TAB 1: WATERFALL POR CECO
     # ==============================================================================
     with tab_ceco:
         act_ceco = df_f.groupby('Desc_Ceco')['Gasto_Real'].sum()
@@ -348,19 +327,16 @@ def main():
     # TAB 2: WATERFALL POR RESPONSABLE (AGRUPADO)
     # ==============================================================================
     with tab_resp:
-        # Agrupamos por la nueva columna 'Responsable' que ya tiene el mapeo inteligente
         bud_resp = df_bud.groupby('Responsable')['Budget_Anual'].sum() * factor
         act_resp = df_f.groupby('Responsable')['Gasto_Real'].sum()
         all_r = sorted(list(set(act_resp.index) | set(bud_resp.index)))
         
-        # Los totales globales deben coincidir con los del Tab 1
         tot_b, tot_r, tot_p = bud_resp.sum(), act_resp.sum(), df_fp['Gasto_Real'].sum()
 
         lbls_r, vals_r, meas_r, bar_v_r, bar_t_r = ["Budget Total"], [tot_b], ["absolute"], [tot_b], [f"${tot_b:,.0f}"]
         
         for r in all_r:
             a, b = act_resp.get(r,0), bud_resp.get(r,0)
-            # Filtramos variaciones muy pequeñas para limpiar el gráfico
             if abs(a-b)>1:
                 lbls_r.append(r); vals_r.append(a-b); meas_r.append("relative"); bar_v_r.append(a)
                 bar_t_r.append(f"${a:,.0f}" + (f"<br>({a/b*100:.1f}%)" if b!=0 else ""))
@@ -388,7 +364,6 @@ def main():
                 st.plotly_chart(plot_waterfall_generic(d_lbls_r, d_vals_r, d_meas_r, d_bar_r, f"Variación Global vs Budget ({lbl})", True), use_container_width=True, key="wf_resp_drill_global")
             elif clk_resp not in ["Budget Total", f"Real {sel_year-1}"]:
                 st.markdown(f"--- \n ### 🔎 Detalle Responsable: {clk_resp}")
-                # Filtramos por el Responsable seleccionado
                 df_resp_r = df_f[df_f['Responsable']==clk_resp]
                 df_resp_b = df_bud[df_bud['Responsable']==clk_resp]
                 df_resp_p = df_fp[df_fp['Responsable']==clk_resp] 
