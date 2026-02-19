@@ -97,22 +97,37 @@ def load_budget_excel(filename):
 
 @st.cache_data
 def load_responsable_mapping(filename):
+    """
+    Función blindada: Busca limpiar strings al extremo y leer columnas por posición si fallan los nombres.
+    """
     if not os.path.exists(filename):
         return {}
     try:
-        # CORRECCIÓN 1: Leemos específicamente las columnas B y C (índice 0 = fila 1)
-        df_map = pd.read_excel(filename, sheet_name='Ceco', header=0, usecols="B:C")
+        # Cargamos la hoja completa usando la fila 1 como cabecera
+        df_map = pd.read_excel(filename, sheet_name='Ceco', header=0)
         
-        # Renombramos explícitamente para evitar problemas con espacios en blanco ocultos en Excel
-        df_map.columns = ['Den Ceco', 'Agrup. Ceco']
+        # Limpieza de cabeceras
+        cols = df_map.columns.astype(str).str.strip().str.upper()
+        df_map.columns = cols
         
-        df_map = df_map.dropna(subset=['Den Ceco', 'Agrup. Ceco'])
-        df_map['Den Ceco'] = df_map['Den Ceco'].astype(str).str.upper().str.strip()
-        df_map['Agrup. Ceco'] = df_map['Agrup. Ceco'].astype(str).str.upper().str.strip()
+        # Estrategia 1: Buscar por nombres exactos
+        if 'DEN CECO' in cols and 'AGRUP. CECO' in cols:
+            col_key, col_val = 'DEN CECO', 'AGRUP. CECO'
+        # Estrategia 2: Tomar columnas B (índice 1) y C (índice 2)
+        elif len(cols) >= 3:
+            col_key, col_val = cols[1], cols[2]
+        else:
+            return {}
+
+        df_map = df_map.dropna(subset=[col_key, col_val])
         
-        return dict(zip(df_map['Den Ceco'], df_map['Agrup. Ceco']))
+        # Limpieza extrema de datos: string, mayúsculas, sin espacios al inicio ni al final
+        keys = df_map[col_key].astype(str).str.upper().str.strip()
+        vals = df_map[col_val].astype(str).str.upper().str.strip()
+        
+        return dict(zip(keys, vals))
     except Exception as e:
-        st.error(f"Error cargando mapeo de responsables (Pestaña 'Ceco'): {e}")
+        st.error(f"Error cargando mapeo de responsables: {e}")
         return {}
 
 # ==============================================================================
@@ -209,6 +224,11 @@ def main():
         factor = float(sel_month)/12.0
         lbl = f"YTD (Ene-{m_names[sel_month]})"
 
+    # --- LIMPIEZA EXTREMA ANTES DE MAPEAR ---
+    df_f['Desc_Ceco'] = df_f['Desc_Ceco'].astype(str).str.upper().str.strip()
+    df_fp['Desc_Ceco'] = df_fp['Desc_Ceco'].astype(str).str.upper().str.strip()
+    df_bud['Desc_Ceco'] = df_bud['Desc_Ceco'].astype(str).str.upper().str.strip()
+
     # --- APLICAR MAPEO DE RESPONSABLES ---
     df_f['Responsable'] = df_f['Desc_Ceco'].map(dict_responsables).fillna('SIN ASIGNAR')
     df_fp['Responsable'] = df_fp['Desc_Ceco'].map(dict_responsables).fillna('SIN ASIGNAR')
@@ -223,19 +243,25 @@ def main():
         diff_prior = real - prior
         pct_prior = (diff_prior / prior * 100) if prior else 0
         
-        # CORRECCIÓN 2: Incluimos el signo explicitamente para que Streamlit detecte bien el color con 'inverse'
+        # --- LÓGICA DE COLOR (Corregida para el renderizado de Streamlit) ---
+        # Aseguramos que el string empiece exactamente con el signo +/-
         if diff_bud < 0:
-            lbl_bud_txt = "Ahorro"
-            delta_text_bud = f"-{abs(pct_bud):.1f}% {lbl_bud_txt}"
+            delta_text_bud = f"-{abs(pct_bud):.1f}% Ahorro"
+        elif diff_bud > 0:
+            delta_text_bud = f"+{abs(pct_bud):.1f}% Exceso"
         else:
-            lbl_bud_txt = "Exceso"
-            delta_text_bud = f"+{abs(pct_bud):.1f}% {lbl_bud_txt}"
+            delta_text_bud = "0.0% Igual"
+
+        if diff_prior < 0:
+            delta_text_prior = f"-{abs(diff_prior):,.0f}"
+        else:
+            delta_text_prior = f"+{abs(diff_prior):,.0f}"
 
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Budget", f"${budget:,.0f}")
         c2.metric("Real", f"${real:,.0f}", f"{diff_bud:+,.0f}", delta_color="inverse")
         c3.metric("Var vs Bud", f"{pct_bud:+.1f}%", delta_text_bud, delta_color="inverse")
-        c4.metric(f"Vs {prior_label}", f"{pct_prior:+.1f}%", f"{diff_prior:+,.0f}", delta_color="inverse")
+        c4.metric(f"Vs {prior_label}", f"{pct_prior:+.1f}%", delta_text_prior, delta_color="inverse")
 
     # --- TABS REORGANIZADOS ---
     tab_ceco, tab_resp, tab_evo, tab_comp = st.tabs(["Waterfall por CeCo", "Waterfall por Responsable", "Evolución", "Comparativa"])
@@ -323,7 +349,7 @@ def main():
         
         lbls_r.append("Total Real"); vals_r.append(tot_r); meas_r.append("total"); bar_v_r.append(tot_r); bar_t_r.append(f"${tot_r:,.0f}")
         
-        st.subheader(f"Variación por Responsable (Agrupación CeCo) ({lbl})")
+        st.subheader(f"Variación por Responsable ({lbl})")
         mostrar_kpis(tot_b, tot_r, tot_p, str(sel_year-1))
 
         sel_resp = st.plotly_chart(plot_waterfall_generic(lbls_r, vals_r, meas_r, bar_v_r, f"Waterfall Responsable {lbl}", False, False, bar_t_r, tot_p, f"Real {sel_year-1}"), use_container_width=True, on_select="rerun", key="wf_resp_main")
@@ -376,3 +402,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
