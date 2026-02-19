@@ -30,7 +30,7 @@ MOM_COLOR_CURR = '#003366'
 MOM_COLOR_BUD = '#F4D03F'
 
 # ==============================================================================
-# 1. FUNCIONES AUXILIARES
+# 1. FUNCIONES AUXILIARES Y LÓGICA DE MATCHING INTELIGENTE
 # ==============================================================================
 def normalizar_denom3(texto):
     if pd.isna(texto): return "OTROS"
@@ -48,12 +48,23 @@ def normalizar_denom3(texto):
     if any(x in t for x in ['OTHER']): return "OTHER"
     return t
 
-def get_first_word(text):
-    """Extrae la primera palabra de un texto y la convierte a mayúsculas."""
+def extract_key_word(text):
+    """
+    Busca explícitamente las palabras clave para hacer un match a prueba de errores.
+    Convierte temporalmente a mayúsculas solo para buscar.
+    """
     if pd.isna(text): return ""
+    t = str(text).upper()
+    
+    if "G&A" in t: return "G&A"
+    if "SELLING" in t: return "SELLING"
+    if "INVENTORY" in t: return "INVENTORY"
+    if "INTERNAL" in t: return "INTERNAL"
+    if "CUSTOMER" in t: return "CUSTOMER"
+    
+    # Fallback por si hay una palabra diferente: toma la primera separada por espacio
     parts = str(text).strip().split()
-    if not parts: return ""
-    return parts[0].upper() # Ej: "G&A - Marketing" -> "G&A"
+    return parts[0].upper() if parts else ""
 
 # ==============================================================================
 # 2. CARGA DE DATOS
@@ -70,7 +81,7 @@ def load_data_from_excel(filename):
         df = df.dropna(subset=['Fecha'])
         df['Concepto_Norm'] = df['Denom3'].apply(normalizar_denom3)
         df['Gasto_Real'] = df['Valor'] * 1 
-        df['Desc_Ceco'] = df['Desc_Ceco'].astype(str).str.upper().str.strip()
+        df['Desc_Ceco'] = df['Desc_Ceco'].astype(str).str.strip()
         df = df.sort_values('Fecha')
         return df, "Datos cargados correctamente."
     except Exception as e:
@@ -93,8 +104,8 @@ def load_budget_excel(filename):
         df_melt = df_melt.rename(columns={col_ceco_name: 'Desc_Ceco'})
         
         df_melt['Budget_Anual'] = pd.to_numeric(df_melt['Budget_Anual'], errors='coerce').fillna(0) * 1000
-        df_melt['Desc_Ceco'] = df_melt['Desc_Ceco'].astype(str).str.upper().str.strip()
-        df_melt = df_melt[~df_melt['Desc_Ceco'].isin(['NAN', 'NONE', '', 'NAN'])]
+        df_melt['Desc_Ceco'] = df_melt['Desc_Ceco'].astype(str).str.strip()
+        df_melt = df_melt[~df_melt['Desc_Ceco'].isin(['NAN', 'NONE', '', 'NAN', 'nan'])]
         df_melt['Concepto_Norm'] = df_melt['Concepto_Raw'].apply(normalizar_denom3)
         
         return df_melt.groupby(['Desc_Ceco', 'Concepto_Norm'])['Budget_Anual'].sum().reset_index()
@@ -103,35 +114,33 @@ def load_budget_excel(filename):
         return pd.DataFrame(columns=['Desc_Ceco', 'Concepto_Norm', 'Budget_Anual'])
 
 @st.cache_data
-def create_first_word_mapping(filename):
+def create_responsable_mapping(filename):
     """
-    Crea un diccionario donde la llave es la primera palabra de 'Den Ceco'
-    y el valor es el 'Agrup. Ceco' correspondiente.
+    Lee las columnas B y C de la sheet 'Ceco'.
+    Crea el match usando las palabras clave y RESPETA el formato de 'Agrup. Ceco'.
     """
     if not os.path.exists(filename): return {}
     try:
-        df_map = pd.read_excel(filename, sheet_name='Ceco', header=0)
+        # Leemos específicamente la hoja 'Ceco' y las columnas B (índice 1) y C (índice 2)
+        df_map = pd.read_excel(filename, sheet_name='Ceco', header=0, usecols="B:C")
         
-        cols = df_map.columns.astype(str).str.strip().str.upper()
-        df_map.columns = cols
+        # Asignamos nombres genéricos por si el encabezado tiene espacios raros
+        col_den_ceco = df_map.columns[0]
+        col_agrup_ceco = df_map.columns[1]
         
-        if 'DEN CECO' in cols and 'AGRUP. CECO' in cols:
-            col_key, col_val = 'DEN CECO', 'AGRUP. CECO'
-        elif len(cols) >= 3:
-            col_key, col_val = cols[1], cols[2]
-        else:
-            return {}
-
-        df_map = df_map.dropna(subset=[col_key, col_val])
+        df_map = df_map.dropna(subset=[col_den_ceco, col_agrup_ceco])
         
-        # Extraer la primera palabra
-        df_map['First_Word'] = df_map[col_key].apply(get_first_word)
+        # 1. Obtenemos la llave normalizada (Ej: "G&A")
+        df_map['Match_Key'] = df_map[col_den_ceco].apply(extract_key_word)
         
-        # Eliminar duplicados para que quede una sola regla por primera palabra
-        df_unique = df_map.drop_duplicates(subset=['First_Word'])
+        # 2. Rescatamos el valor original de Agrup Ceco (solo quitamos espacios en los bordes)
+        df_map['Responsable_Final'] = df_map[col_agrup_ceco].astype(str).str.strip()
         
-        # Diccionario: { "G&A": "Responsable 1", "SELLING": "Responsable 2", ... }
-        return dict(zip(df_unique['First_Word'], df_unique[col_val].astype(str).str.upper().str.strip()))
+        # Eliminamos duplicados por la llave para dejar 1 sola regla por grupo
+        df_unique = df_map.drop_duplicates(subset=['Match_Key'])
+        
+        # Diccionario Final -> {"G&A": "Finanzas", "SELLING": "Ventas y MKT", ...}
+        return dict(zip(df_unique['Match_Key'], df_unique['Responsable_Final']))
 
     except Exception as e:
         st.error(f"Error creando mapeo por primera palabra: {e}")
@@ -206,8 +215,8 @@ def main():
             st.error("Error cargando datos. Verifique los archivos.")
             return
             
-        # Generar el diccionario {Primera_Palabra : Responsable}
-        dict_responsables = create_first_word_mapping(BUDGET_FILENAME)
+        # Generar el diccionario {Palabra_Clave : Responsable_Original}
+        dict_responsables = create_responsable_mapping(BUDGET_FILENAME)
 
     st.success(msg)
 
@@ -236,10 +245,10 @@ def main():
         factor = float(sel_month)/12.0
         lbl = f"YTD (Ene-{m_names[sel_month]})"
 
-    # --- FUNCIÓN PARA APLICAR EL MAPEO A LOS DATAFRAMES ---
+    # --- APLICAR MAPEO INTELIGENTE ---
     def assign_responsable(ceco_name):
-        fw = get_first_word(ceco_name)
-        return dict_responsables.get(fw, 'SIN ASIGNAR')
+        k = extract_key_word(ceco_name)
+        return dict_responsables.get(k, 'SIN ASIGNAR')
 
     df_f['Responsable'] = df_f['Desc_Ceco'].apply(assign_responsable)
     df_fp['Responsable'] = df_fp['Desc_Ceco'].apply(assign_responsable)
