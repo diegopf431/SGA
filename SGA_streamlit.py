@@ -15,8 +15,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- RUTAS DE ARCHIVOS PARA STREAMLIT CLOUD ---
-# Asegúrate de que estos dos archivos estén subidos a tu repositorio de GitHub
+# --- NOMBRES DE ARCHIVOS ---
 DATA_FILENAME = "data_sga_source.xlsx" 
 BUDGET_FILENAME = "2025 10 13 - SGA MOD - V31 - send 1.xlsx" 
 
@@ -26,126 +25,74 @@ COLOR_BARS_REAL = '#3399FF'
 COLOR_GOOD = '#009966'      
 COLOR_BAD = '#CC0000'       
 COLOR_NEUTRAL = 'rgba(128, 128, 128, 0.5)'
-
 MOM_COLOR_PREV = '#CC0000'
 MOM_COLOR_CURR = '#003366'
 MOM_COLOR_BUD = '#F4D03F'
 
 # ==============================================================================
-# 1. LÓGICA DE NORMALIZACIÓN
+# 1. FUNCIONES AUXILIARES
 # ==============================================================================
 def normalizar_denom3(texto):
-    """
-    Recibe un texto (sea de Access o de Excel) y devuelve una categoría estándar.
-    """
     if pd.isna(texto): return "OTROS"
     t = str(texto).upper().strip()
-    
-    # REGLAS DE MAPEO
-    if any(x in t for x in ['SALAR', 'WAGE', 'SUELDO', 'REMUNERACION', 'PAYROLL', 'PERSONAL']):
-        return "SALARY"
-    if any(x in t for x in ['TRAVEL', 'VIAJE', 'HOTEL', 'FLIGHT', 'LODGING']):
-        return "TRAVEL"
-    if any(x in t for x in ['RE-INVOICE', 'REINVOICE', 'INTERCOMPANY']):
-        return "RE-INVOICED"
-    if any(x in t for x in ['FEE', 'CONSULT', 'HONORARIO', 'LEGAL']):
-        return "FEES"
-    if any(x in t for x in ['RENT', 'ARRIENDO', 'LEASE']):
-        return "RENTAL"
-    if any(x in t for x in ['DEPRECIATION', 'AMORTIZATION']):
-        return "DEPRECIATION"
-    if any(x in t for x in ['TELECOM', 'MAIL']):
-        return "TELECOM/MAIL"
-    if any(x in t for x in ['SUPPLIE', 'SUPLIE']):
-        return "SUPPLIES"
-    if any(x in t for x in ['ENERGY']):
-        return "ENERGY"
-    if any(x in t for x in ['TAX', 'INSURANCE']):
-        return "TAX/INSURANCE"
-    if any(x in t for x in ['OTHER']):
-        return "OTHER"
-    
+    if any(x in t for x in ['SALAR', 'WAGE', 'SUELDO', 'REMUNERACION', 'PAYROLL', 'PERSONAL']): return "SALARY"
+    if any(x in t for x in ['TRAVEL', 'VIAJE', 'HOTEL', 'FLIGHT', 'LODGING']): return "TRAVEL"
+    if any(x in t for x in ['RE-INVOICE', 'REINVOICE', 'INTERCOMPANY']): return "RE-INVOICED"
+    if any(x in t for x in ['FEE', 'CONSULT', 'HONORARIO', 'LEGAL']): return "FEES"
+    if any(x in t for x in ['RENT', 'ARRIENDO', 'LEASE']): return "RENTAL"
+    if any(x in t for x in ['DEPRECIATION', 'AMORTIZATION']): return "DEPRECIATION"
+    if any(x in t for x in ['TELECOM', 'MAIL']): return "TELECOM/MAIL"
+    if any(x in t for x in ['SUPPLIE', 'SUPLIE']): return "SUPPLIES"
+    if any(x in t for x in ['ENERGY']): return "ENERGY"
+    if any(x in t for x in ['TAX', 'INSURANCE']): return "TAX/INSURANCE"
+    if any(x in t for x in ['OTHER']): return "OTHER"
     return t
 
 # ==============================================================================
-# 2. CARGA DE DATOS (Adaptada para Streamlit con Excel)
+# 2. CARGA DE DATOS
 # ==============================================================================
 @st.cache_data
 def load_data_from_excel(filename):
     if not os.path.exists(filename):
-        return None, f"Archivo no encontrado en el repositorio: {filename}"
+        return None, f"⚠️ No se encuentra el archivo: {filename}"
 
     try:
         df = pd.read_excel(filename, sheet_name='BD_EERR')
-    except Exception as e:
-        return None, f"Error leyendo Excel de Datos: {str(e)}"
-
-    if df.empty:
-        return None, "El archivo excel está vacío."
-
-    try:
         df['Fecha_Str'] = df['Year/month'].astype(str).str.replace('.', '/', regex=False)
         df['Fecha'] = pd.to_datetime(df['Fecha_Str'], errors='coerce')
         df['Fecha'] = df['Fecha'].apply(lambda x: x.replace(day=1) if pd.notnull(x) else x)
         df = df.dropna(subset=['Fecha'])
-    except:
-        pass
-
-    df = df.dropna(subset=['Desc_Ceco'])
-    df['Desc_Ceco'] = df['Desc_Ceco'].astype(str).str.upper().str.strip()
-    df = df[~df['Desc_Ceco'].isin(['', 'NAN', 'NONE'])]
-
-    df['Concepto_Norm'] = df['Denom3'].apply(normalizar_denom3)
-    
-    DISPLAY_SIGN = 1 
-    # El archivo generado por el transformador ya renombra "Amount in local currency" a "Valor"
-    df['Gasto_Real'] = df['Valor'] * DISPLAY_SIGN
-
-    df = df.sort_values('Fecha')
-    return df, "Datos cargados."
+        df['Concepto_Norm'] = df['Denom3'].apply(normalizar_denom3)
+        df['Gasto_Real'] = df['Valor'] * 1 
+        df = df.sort_values('Fecha')
+        return df, "Datos cargados correctamente."
+    except Exception as e:
+        return None, f"Error leyendo Excel de Datos: {e}"
 
 @st.cache_data
-def load_budget_excel(excel_path):
-    if not os.path.exists(excel_path):
+def load_budget_excel(filename):
+    if not os.path.exists(filename):
         return pd.DataFrame(columns=['Desc_Ceco', 'Concepto_Norm', 'Budget_Anual'])
-
     try:
-        df_ex = pd.read_excel(excel_path, header=5, sheet_name="TD")
-        
+        df_ex = pd.read_excel(filename, header=5)
         col_ceco_name = df_ex.columns[1]
         df_ex = df_ex.dropna(subset=[col_ceco_name])
-
-        if len(df_ex.columns) < 3:
-            return pd.DataFrame(columns=['Desc_Ceco', 'Concepto_Norm', 'Budget_Anual'])
+        if len(df_ex.columns) < 3: return pd.DataFrame()
 
         all_cols = df_ex.columns[2:]
-        cols_conceptos = [
-            c for c in all_cols 
-            if str(c).lower().strip() != 'total general' 
-            and not str(c).startswith('Unnamed')
-        ]
+        cols_conceptos = [c for c in all_cols if str(c).lower().strip() != 'total general' and not str(c).startswith('Unnamed')]
         
-        df_melt = df_ex.melt(
-            id_vars=[col_ceco_name], 
-            value_vars=cols_conceptos, 
-            var_name='Concepto_Raw', 
-            value_name='Budget_Anual'
-        )
-        
+        df_melt = df_ex.melt(id_vars=[col_ceco_name], value_vars=cols_conceptos, var_name='Concepto_Raw', value_name='Budget_Anual')
         df_melt = df_melt.rename(columns={col_ceco_name: 'Desc_Ceco'})
         
         df_melt['Budget_Anual'] = pd.to_numeric(df_melt['Budget_Anual'], errors='coerce').fillna(0) * 1000
         df_melt['Desc_Ceco'] = df_melt['Desc_Ceco'].astype(str).str.upper().str.strip()
         df_melt = df_melt[~df_melt['Desc_Ceco'].isin(['NAN', 'NONE', ''])]
-        
         df_melt['Concepto_Norm'] = df_melt['Concepto_Raw'].apply(normalizar_denom3)
         
-        df_final = df_melt.groupby(['Desc_Ceco', 'Concepto_Norm'])['Budget_Anual'].sum().reset_index()
-        
-        return df_final
-
+        return df_melt.groupby(['Desc_Ceco', 'Concepto_Norm'])['Budget_Anual'].sum().reset_index()
     except Exception as e:
-        st.error(f"Error leyendo Excel de Budgets: {e}")
+        st.error(f"Error leyendo Budget: {e}")
         return pd.DataFrame(columns=['Desc_Ceco', 'Concepto_Norm', 'Budget_Anual'])
 
 @st.cache_data
@@ -167,16 +114,15 @@ def load_ceco_mapping(excel_path):
         
         mapping_dict = df_map.set_index(col_den)[col_agrup].to_dict()
         
-        # --- NUEVO: REGLAS DE EXCEPCIÓN PARA NOMBRES ABREVIADOS ---
-        # Como en la base vienen abreviados, los conectamos a la fuerza con su agrupación
+        # --- EXCEPCIONES PARA ABREVIATURAS Y EL CECO VIRTUAL ---
         excepciones = {
             "INT.TRANSP.CST": "Sales & CSR's",
             "CUS.TRANSP.CST": "Sales & CSR's",
             "SELLING - OTHER DIR.": "Sales & CSR's",
-            "SELLING - OTHER IND.": "Sales & CSR's"
+            "SELLING - OTHER IND.": "Sales & CSR's",
+            "RE-INVOICED (AGRUPADO)": "Sales & CSR's"
         }
         
-        # Inyectamos estas excepciones al diccionario de mapeo
         for abrev, asignacion in excepciones.items():
             mapping_dict[abrev] = asignacion
             
@@ -185,10 +131,10 @@ def load_ceco_mapping(excel_path):
     except Exception as e:
         st.warning(f"No se pudo cargar la pestaña 'Ceco' para agrupación: {e}")
         return {}
-# ==============================================================================
-# 3. FUNCIONES GRÁFICAS 
-# ==============================================================================
 
+# ==============================================================================
+# 3. GRÁFICOS
+# ==============================================================================
 def plot_waterfall_generic(labels, wf_values, wf_measures, bar_values, title, is_drilldown=False, simple_bar_mode=False, bar_custom_text=None, val_prior_year=None, label_prior_year="Año Ant"):
     fig = go.Figure()
 
@@ -204,7 +150,6 @@ def plot_waterfall_generic(labels, wf_values, wf_measures, bar_values, title, is
     bg_widths = [] 
 
     for i, measure in enumerate(wf_measures):
-        # Configuramos los colores y los nuevos grosores ampliados
         if val_prior_year is not None and i == 0:
              bg_colors.append(MOM_COLOR_PREV)
              bg_widths.append(0.9) 
@@ -345,6 +290,12 @@ def main():
         st.error(msg)
         return
     else:
+        # --- CREACIÓN DEL CECO VIRTUAL PARA RE-INVOICED ---
+        virtual_ceco_name = "RE-INVOICED (AGRUPADO)"
+        df.loc[df['Concepto_Norm'] == 'RE-INVOICED', 'Desc_Ceco'] = virtual_ceco_name
+        df_budgets_db.loc[df_budgets_db['Concepto_Norm'] == 'RE-INVOICED', 'Desc_Ceco'] = virtual_ceco_name
+
+        # --- APLICAR MAPEO GENERAL ---
         df['Agrup_Ceco'] = df['Desc_Ceco'].map(ceco_mapping).fillna("SIN AGRUPACION")
         df_budgets_db['Agrup_Ceco'] = df_budgets_db['Desc_Ceco'].map(ceco_mapping).fillna("SIN AGRUPACION")
         st.success(f"✅ Datos listos.")
@@ -871,6 +822,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
