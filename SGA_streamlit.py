@@ -166,12 +166,25 @@ def load_ceco_mapping(excel_path):
         df_map[col_agrup] = df_map[col_agrup].astype(str).str.strip()
         
         mapping_dict = df_map.set_index(col_den)[col_agrup].to_dict()
+        
+        # --- NUEVO: REGLAS DE EXCEPCIÓN PARA NOMBRES ABREVIADOS ---
+        # Como en la base vienen abreviados, los conectamos a la fuerza con su agrupación
+        excepciones = {
+            "INT.TRANSP.CST": "Sales & CSR's",
+            "CUS.TRANS.CST": "Sales & CSR's",
+            "SELLING - OTHER DIR.": "Sales & CSR's",
+            "SELLING - OTHER IND.": "Sales & CSR's"
+        }
+        
+        # Inyectamos estas excepciones al diccionario de mapeo
+        for abrev, asignacion in excepciones.items():
+            mapping_dict[abrev] = asignacion
+            
         return mapping_dict
 
     except Exception as e:
         st.warning(f"No se pudo cargar la pestaña 'Ceco' para agrupación: {e}")
         return {}
-
 # ==============================================================================
 # 3. FUNCIONES GRÁFICAS 
 # ==============================================================================
@@ -858,6 +871,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
