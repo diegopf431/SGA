@@ -95,6 +95,26 @@ def load_budget_excel(filename):
         st.error(f"Error leyendo Budget: {e}")
         return pd.DataFrame(columns=['Desc_Ceco', 'Concepto_Norm', 'Budget_Anual'])
 
+@st.cache_data
+def load_responsable_mapping(filename):
+    """
+    Lee la pestaña 'Ceco' del Excel y devuelve un diccionario {Ceco: Responsable}.
+    """
+    if not os.path.exists(filename):
+        return {}
+    try:
+        df_map = pd.read_excel(filename, sheet_name='Ceco')
+        # Limpiar para asegurar el cruce exacto
+        df_map = df_map.dropna(subset=['Den Ceco', 'Agrup. Ceco'])
+        df_map['Den Ceco'] = df_map['Den Ceco'].astype(str).str.upper().str.strip()
+        df_map['Agrup. Ceco'] = df_map['Agrup. Ceco'].astype(str).str.upper().str.strip()
+        
+        # Crear diccionario {Den Ceco : Agrup. Ceco}
+        return dict(zip(df_map['Den Ceco'], df_map['Agrup. Ceco']))
+    except Exception as e:
+        st.error(f"Error cargando mapeo de responsables (Pestaña 'Ceco'): {e}")
+        return {}
+
 # ==============================================================================
 # 3. GRÁFICOS
 # ==============================================================================
@@ -159,6 +179,7 @@ def main():
     with st.spinner('Cargando archivos Excel...'):
         df, msg = load_data_from_excel(DATA_FILENAME)
         df_bud = load_budget_excel(BUDGET_FILENAME)
+        dict_responsables = load_responsable_mapping(BUDGET_FILENAME)
     
     if df is None: st.error(msg); return
     else: st.success(msg)
@@ -188,36 +209,36 @@ def main():
         factor = float(sel_month)/12.0
         lbl = f"YTD (Ene-{m_names[sel_month]})"
 
+    # --- APLICAR MAPEO DE RESPONSABLES ---
+    df_f['Responsable'] = df_f['Desc_Ceco'].map(dict_responsables).fillna('SIN ASIGNAR')
+    df_fp['Responsable'] = df_fp['Desc_Ceco'].map(dict_responsables).fillna('SIN ASIGNAR')
+    df_bud['Responsable'] = df_bud['Desc_Ceco'].map(dict_responsables).fillna('SIN ASIGNAR')
+
     bud_ceco = df_bud.groupby('Desc_Ceco')['Budget_Anual'].sum() * factor
     
-    # --- HELPER PARA MOSTRAR KPIS (ACTUALIZADO CON TEXTO DE AHORRO/EXCESO) ---
+    # --- HELPER PARA MOSTRAR KPIS ---
     def mostrar_kpis(budget, real, prior, prior_label):
         diff_bud = real - budget
         pct_bud = (diff_bud / budget * 100) if budget else 0
         diff_prior = real - prior
         pct_prior = (diff_prior / prior * 100) if prior else 0
         
-        # LOGICA DE TEXTO PARA LA BURBUJA
-        if diff_bud < 0:
-            lbl_bud_txt = "Ahorro"
-        else:
-            lbl_bud_txt = "Exceso"
-        
-        # El delta combina el % absoluto + la palabra
-        delta_text_bud = f"{pct_bud:.1f}% {lbl_bud_txt}"
+        lbl_bud_txt = "Ahorro" if diff_bud < 0 else "Exceso"
+        delta_text_bud = f"{abs(pct_bud):.1f}% {lbl_bud_txt}"
 
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Budget", f"${budget:,.0f}")
         c2.metric("Real", f"${real:,.0f}", f"{diff_bud:+,.0f}", delta_color="inverse")
-        
-        # AQUI SE APLICA EL CAMBIO SOLICITADO
         c3.metric("Var vs Bud", f"{pct_bud:+.1f}%", delta_text_bud, delta_color="inverse")
-        
         c4.metric(f"Vs {prior_label}", f"{pct_prior:+.1f}%", f"{diff_prior:+,.0f}", delta_color="inverse")
 
-    tab1, tab2, tab3 = st.tabs(["Waterfall", "Evolución", "Comparativa"])
+    # --- TABS REORGANIZADOS ---
+    tab_ceco, tab_resp, tab_evo, tab_comp = st.tabs(["Waterfall por CeCo", "Waterfall por Responsable", "Evolución", "Comparativa"])
     
-    with tab1:
+    # ==============================================================================
+    # TAB 1: WATERFALL POR CECO
+    # ==============================================================================
+    with tab_ceco:
         act_ceco = df_f.groupby('Desc_Ceco')['Gasto_Real'].sum()
         all_c = sorted(list(set(act_ceco.index) | set(bud_ceco.index)))
         tot_b, tot_r, tot_p = bud_ceco.sum(), act_ceco.sum(), df_fp['Gasto_Real'].sum()
@@ -232,22 +253,17 @@ def main():
         
         lbls.append("Total Real"); vals.append(tot_r); meas.append("total"); bar_v.append(tot_r); bar_t.append(f"${tot_r:,.0f}")
         
-        st.subheader(f"Variación {lbl}")
-        
-        # 1. MOSTRAR KPIS PRINCIPALES
+        st.subheader(f"Variación por Centro de Costo ({lbl})")
         mostrar_kpis(tot_b, tot_r, tot_p, str(sel_year-1))
 
-        # GRAFICO PRINCIPAL
-        sel = st.plotly_chart(plot_waterfall_generic(lbls, vals, meas, bar_v, f"Waterfall {lbl}", False, False, bar_t, tot_p, f"Real {sel_year-1}"), use_container_width=True, on_select="rerun")
+        # Agregamos "key" para evitar conflictos
+        sel = st.plotly_chart(plot_waterfall_generic(lbls, vals, meas, bar_v, f"Waterfall CeCo {lbl}", False, False, bar_t, tot_p, f"Real {sel_year-1}"), use_container_width=True, on_select="rerun", key="wf_ceco_main")
         
-        # --- LOGICA DE DRILL DOWN ---
         clk = sel["selection"]["points"][0]["x"] if sel and sel["selection"]["points"] else None
         
         if clk:
             if clk == "Total Real":
                 st.markdown(f"--- \n ### 🌎 Zoom Global: Desglose por Concepto")
-                
-                # En vista global, los totales son los mismos
                 mostrar_kpis(tot_b, tot_r, tot_p, str(sel_year-1))
 
                 grp_r = df_f.groupby('Concepto_Norm')['Gasto_Real'].sum()
@@ -261,21 +277,15 @@ def main():
                         d_lbls.append(concept); d_vals.append(vr-vb); d_meas.append("relative"); d_bar.append(vr)
                         
                 d_lbls.append("Total Real"); d_vals.append(grp_r.sum()); d_meas.append("total"); d_bar.append(grp_r.sum())
-                
-                st.plotly_chart(plot_waterfall_generic(d_lbls, d_vals, d_meas, d_bar, f"Variación Global vs Budget ({lbl})", True), use_container_width=True)
+                st.plotly_chart(plot_waterfall_generic(d_lbls, d_vals, d_meas, d_bar, f"Variación Global vs Budget ({lbl})", True), use_container_width=True, key="wf_ceco_drill_global")
 
             elif clk not in ["Budget Total", f"Real {sel_year-1}"]:
-                st.markdown(f"--- \n ### 🔎 Detalle: {clk}")
+                st.markdown(f"--- \n ### 🔎 Detalle CeCo: {clk}")
                 df_c_r = df_f[df_f['Desc_Ceco']==clk]
                 df_c_b = df_bud[df_bud['Desc_Ceco']==clk]
                 df_c_p = df_fp[df_fp['Desc_Ceco']==clk] 
                 
-                ceco_real = df_c_r['Gasto_Real'].sum()
-                ceco_bud = df_c_b['Budget_Anual'].sum() * factor
-                ceco_prior = df_c_p['Gasto_Real'].sum()
-                
-                # 2. MOSTRAR KPIS ESPECIFICOS DEL CECO
-                mostrar_kpis(ceco_bud, ceco_real, ceco_prior, str(sel_year-1))
+                mostrar_kpis(df_c_b['Budget_Anual'].sum() * factor, df_c_r['Gasto_Real'].sum(), df_c_p['Gasto_Real'].sum(), str(sel_year-1))
                 
                 grp_r = df_c_r.groupby('Concepto_Norm')['Gasto_Real'].sum()
                 grp_b = df_c_b.groupby('Concepto_Norm')['Budget_Anual'].sum() * factor
@@ -287,11 +297,80 @@ def main():
                         d_lbls.append(concept); d_vals.append(vr-vb); d_meas.append("relative"); d_bar.append(vr)
                 d_lbls.append("Real"); d_vals.append(grp_r.sum()); d_meas.append("total"); d_bar.append(grp_r.sum())
                 
-                st.plotly_chart(plot_waterfall_generic(d_lbls, d_vals, d_meas, d_bar, f"Detalle {clk}", True), use_container_width=True)
+                st.plotly_chart(plot_waterfall_generic(d_lbls, d_vals, d_meas, d_bar, f"Detalle {clk}", True), use_container_width=True, key="wf_ceco_drill_detail")
 
-    with tab2: st.plotly_chart(plot_mom_evolution(df, sel_year, df_bud['Budget_Anual'].sum()/12), use_container_width=True)
-    with tab3: st.plotly_chart(plot_comparison_bars(df_f, df_fp, sel_year, sel_year-1, bud_ceco), use_container_width=True)
+    # ==============================================================================
+    # TAB 2: WATERFALL POR RESPONSABLE (AGRUPACIÓN CECO)
+    # ==============================================================================
+    with tab_resp:
+        bud_resp = df_bud.groupby('Responsable')['Budget_Anual'].sum() * factor
+        act_resp = df_f.groupby('Responsable')['Gasto_Real'].sum()
+        all_r = sorted(list(set(act_resp.index) | set(bud_resp.index)))
+        
+        # Los totales globales son idénticos a los del Tab 1
+        tot_b, tot_r, tot_p = bud_resp.sum(), act_resp.sum(), df_fp['Gasto_Real'].sum()
+
+        lbls_r, vals_r, meas_r, bar_v_r, bar_t_r = ["Budget Total"], [tot_b], ["absolute"], [tot_b], [f"${tot_b:,.0f}"]
+        
+        for r in all_r:
+            a, b = act_resp.get(r,0), bud_resp.get(r,0)
+            if abs(a-b)>1:
+                lbls_r.append(r); vals_r.append(a-b); meas_r.append("relative"); bar_v_r.append(a)
+                bar_t_r.append(f"${a:,.0f}" + (f"<br>({a/b*100:.1f}%)" if b!=0 else ""))
+        
+        lbls_r.append("Total Real"); vals_r.append(tot_r); meas_r.append("total"); bar_v_r.append(tot_r); bar_t_r.append(f"${tot_r:,.0f}")
+        
+        st.subheader(f"Variación por Responsable (Agrupación CeCo) ({lbl})")
+        mostrar_kpis(tot_b, tot_r, tot_p, str(sel_year-1))
+
+        # Agregamos "key" diferente
+        sel_resp = st.plotly_chart(plot_waterfall_generic(lbls_r, vals_r, meas_r, bar_v_r, f"Waterfall Responsable {lbl}", False, False, bar_t_r, tot_p, f"Real {sel_year-1}"), use_container_width=True, on_select="rerun", key="wf_resp_main")
+        
+        clk_resp = sel_resp["selection"]["points"][0]["x"] if sel_resp and sel_resp["selection"]["points"] else None
+        
+        if clk_resp:
+            if clk_resp == "Total Real":
+                st.markdown(f"--- \n ### 🌎 Zoom Global: Desglose por Concepto")
+                mostrar_kpis(tot_b, tot_r, tot_p, str(sel_year-1))
+
+                grp_r = df_f.groupby('Concepto_Norm')['Gasto_Real'].sum()
+                grp_b = df_bud.groupby('Concepto_Norm')['Budget_Anual'].sum() * factor
+                
+                d_lbls_r, d_vals_r, d_meas_r, d_bar_r = ["Budget Global"], [grp_b.sum()], ["absolute"], [grp_b.sum()]
+                
+                for concept in sorted(list(set(grp_r.index)|set(grp_b.index))):
+                    vr, vb = grp_r.get(concept,0), grp_b.get(concept,0)
+                    if abs(vr-vb)>1:
+                        d_lbls_r.append(concept); d_vals_r.append(vr-vb); d_meas_r.append("relative"); d_bar_r.append(vr)
+                        
+                d_lbls_r.append("Total Real"); d_vals_r.append(grp_r.sum()); d_meas_r.append("total"); d_bar_r.append(grp_r.sum())
+                st.plotly_chart(plot_waterfall_generic(d_lbls_r, d_vals_r, d_meas_r, d_bar_r, f"Variación Global vs Budget ({lbl})", True), use_container_width=True, key="wf_resp_drill_global")
+
+            elif clk_resp not in ["Budget Total", f"Real {sel_year-1}"]:
+                st.markdown(f"--- \n ### 🔎 Detalle Responsable: {clk_resp}")
+                df_resp_r = df_f[df_f['Responsable']==clk_resp]
+                df_resp_b = df_bud[df_bud['Responsable']==clk_resp]
+                df_resp_p = df_fp[df_fp['Responsable']==clk_resp] 
+                
+                mostrar_kpis(df_resp_b['Budget_Anual'].sum() * factor, df_resp_r['Gasto_Real'].sum(), df_resp_p['Gasto_Real'].sum(), str(sel_year-1))
+                
+                grp_r_r = df_resp_r.groupby('Concepto_Norm')['Gasto_Real'].sum()
+                grp_b_r = df_resp_b.groupby('Concepto_Norm')['Budget_Anual'].sum() * factor
+                
+                d_lbls_r, d_vals_r, d_meas_r, d_bar_r = ["Budget"], [grp_b_r.sum()], ["absolute"], [grp_b_r.sum()]
+                for concept in sorted(list(set(grp_r_r.index)|set(grp_b_r.index))):
+                    vr, vb = grp_r_r.get(concept,0), grp_b_r.get(concept,0)
+                    if abs(vr-vb)>1:
+                        d_lbls_r.append(concept); d_vals_r.append(vr-vb); d_meas_r.append("relative"); d_bar_r.append(vr)
+                d_lbls_r.append("Real"); d_vals_r.append(grp_r_r.sum()); d_meas_r.append("total"); d_bar_r.append(grp_r_r.sum())
+                
+                st.plotly_chart(plot_waterfall_generic(d_lbls_r, d_vals_r, d_meas_r, d_bar_r, f"Detalle {clk_resp}", True), use_container_width=True, key="wf_resp_drill_detail")
+
+    # ==============================================================================
+    # TAB 3 y 4: EVOLUCIÓN Y COMPARATIVA
+    # ==============================================================================
+    with tab_evo: st.plotly_chart(plot_mom_evolution(df, sel_year, df_bud['Budget_Anual'].sum()/12), use_container_width=True)
+    with tab_comp: st.plotly_chart(plot_comparison_bars(df_f, df_fp, sel_year, sel_year-1, bud_ceco), use_container_width=True)
 
 if __name__ == "__main__":
     main()
-
