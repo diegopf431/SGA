@@ -58,10 +58,26 @@ def load_data_from_excel(filename):
 
     try:
         df = pd.read_excel(filename, sheet_name='BD_EERR')
-        df['Fecha_Str'] = df['Year/month'].astype(str).str.replace('.', '/', regex=False)
-        df['Fecha'] = pd.to_datetime(df['Fecha_Str'], errors='coerce')
+        
+        # --- NUEVA LÓGICA BLINDADA PARA FECHAS ---
+        def parse_fecha_segura(val):
+            if pd.isna(val): return pd.NaT
+            if isinstance(val, (datetime.datetime, datetime.date)): return pd.to_datetime(val)
+            
+            v = str(val).strip()
+            if '.' in v:
+                parts = v.split('.', 1)
+                return pd.to_datetime(f"{parts[0]}-{parts[1].zfill(2)}-01", errors='coerce')
+            elif len(v) == 6 and v.isdigit():
+                return pd.to_datetime(f"{v[:4]}-{v[4:]}-01", errors='coerce')
+            else:
+                return pd.to_datetime(v, errors='coerce')
+                
+        df['Fecha'] = df['Year/month'].apply(parse_fecha_segura)
         df['Fecha'] = df['Fecha'].apply(lambda x: x.replace(day=1) if pd.notnull(x) else x)
         df = df.dropna(subset=['Fecha'])
+        # -----------------------------------------
+
         df['Concepto_Norm'] = df['Denom3'].apply(normalizar_denom3)
         df['Gasto_Real'] = df['Valor'] * 1 
         df = df.sort_values('Fecha')
@@ -822,6 +838,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
