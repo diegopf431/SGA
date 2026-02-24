@@ -4,6 +4,7 @@ import streamlit as st
 import datetime
 import numpy as np
 import os
+from zoneinfo import ZoneInfo  # <-- NUEVA LIBRERÍA (Nativa de Python)
 
 # ==============================================================================
 # CONFIGURACIÓN GENERAL
@@ -30,8 +31,27 @@ MOM_COLOR_CURR = '#003366'
 MOM_COLOR_BUD = '#F4D03F'
 
 # ==============================================================================
-# 1. FUNCIONES AUXILIARES
+# 1. FUNCIONES AUXILIARES Y LÓGICA DE CACHE
 # ==============================================================================
+def get_next_sync_ttl():
+    """
+    Calcula los segundos exactos hasta las 09:05 AM (Hora Local)
+    para que el caché expire justo después de que corra el Task Scheduler.
+    """
+    try:
+        # Aseguramos la zona horaria de Santiago para coincidir con tu horario
+        tz = ZoneInfo("America/Santiago")
+        now = datetime.datetime.now(tz)
+    except:
+        now = datetime.datetime.now()
+        
+    sync_time = now.replace(hour=9, minute=5, second=0, microsecond=0)
+    
+    if now >= sync_time:
+        sync_time += datetime.timedelta(days=1)
+        
+    return (sync_time - now).total_seconds()
+
 def normalizar_denom3(texto):
     if pd.isna(texto): return "OTROS"
     t = str(texto).upper().strip()
@@ -49,9 +69,9 @@ def normalizar_denom3(texto):
     return t
 
 # ==============================================================================
-# 2. CARGA DE DATOS
+# 2. CARGA DE DATOS (Con auto-refresh a las 09:05 AM)
 # ==============================================================================
-@st.cache_data
+@st.cache_data(ttl=get_next_sync_ttl())
 def load_data_from_excel(filename):
     if not os.path.exists(filename):
         return None, f"⚠️ No se encuentra el archivo: {filename}"
@@ -59,7 +79,6 @@ def load_data_from_excel(filename):
     try:
         df = pd.read_excel(filename, sheet_name='BD_EERR')
         
-        # --- NUEVA LÓGICA BLINDADA PARA FECHAS ---
         def parse_fecha_segura(val):
             if pd.isna(val): return pd.NaT
             if isinstance(val, (datetime.datetime, datetime.date)): return pd.to_datetime(val)
@@ -76,7 +95,6 @@ def load_data_from_excel(filename):
         df['Fecha'] = df['Year/month'].apply(parse_fecha_segura)
         df['Fecha'] = df['Fecha'].apply(lambda x: x.replace(day=1) if pd.notnull(x) else x)
         df = df.dropna(subset=['Fecha'])
-        # -----------------------------------------
 
         df['Concepto_Norm'] = df['Denom3'].apply(normalizar_denom3)
         df['Gasto_Real'] = df['Valor'] * 1 
@@ -85,7 +103,7 @@ def load_data_from_excel(filename):
     except Exception as e:
         return None, f"Error leyendo Excel de Datos: {e}"
 
-@st.cache_data
+@st.cache_data(ttl=get_next_sync_ttl())
 def load_budget_excel(filename):
     if not os.path.exists(filename):
         return pd.DataFrame(columns=['Desc_Ceco', 'Concepto_Norm', 'Budget_Anual'])
@@ -111,7 +129,7 @@ def load_budget_excel(filename):
         st.error(f"Error leyendo Budget: {e}")
         return pd.DataFrame(columns=['Desc_Ceco', 'Concepto_Norm', 'Budget_Anual'])
 
-@st.cache_data
+@st.cache_data(ttl=get_next_sync_ttl())
 def load_ceco_mapping(excel_path):
     if not os.path.exists(excel_path):
         return {}
@@ -130,7 +148,6 @@ def load_ceco_mapping(excel_path):
         
         mapping_dict = df_map.set_index(col_den)[col_agrup].to_dict()
         
-        # --- EXCEPCIONES PARA ABREVIATURAS Y EL CECO VIRTUAL ---
         excepciones = {
             "INT.TRANSP.CST": "Sales & CSR's",
             "CUS.TRANSP.CST": "Sales & CSR's",
@@ -149,7 +166,7 @@ def load_ceco_mapping(excel_path):
         return {}
 
 # ==============================================================================
-# 3. GRÁFICOS
+# 3. GRÁFICOS (Sin cambios)
 # ==============================================================================
 def plot_waterfall_generic(labels, wf_values, wf_measures, bar_values, title, is_drilldown=False, simple_bar_mode=False, bar_custom_text=None, val_prior_year=None, label_prior_year="Año Ant"):
     fig = go.Figure()
@@ -306,12 +323,10 @@ def main():
         st.error(msg)
         return
     else:
-        # --- CREACIÓN DEL CECO VIRTUAL PARA RE-INVOICED ---
         virtual_ceco_name = "RE-INVOICED (AGRUPADO)"
         df.loc[df['Concepto_Norm'] == 'RE-INVOICED', 'Desc_Ceco'] = virtual_ceco_name
         df_budgets_db.loc[df_budgets_db['Concepto_Norm'] == 'RE-INVOICED', 'Desc_Ceco'] = virtual_ceco_name
 
-        # --- APLICAR MAPEO GENERAL ---
         df['Agrup_Ceco'] = df['Desc_Ceco'].map(ceco_mapping).fillna("SIN AGRUPACION")
         df_budgets_db['Agrup_Ceco'] = df_budgets_db['Desc_Ceco'].map(ceco_mapping).fillna("SIN AGRUPACION")
         st.success(f"✅ Datos listos.")
@@ -349,6 +364,16 @@ def main():
     budgets_ceco_adj = budgets_ceco_raw * budget_factor
     budgets_agrup_raw = df_budgets_db.groupby('Agrup_Ceco')['Budget_Anual'].sum()
     budgets_agrup_adj = budgets_agrup_raw * budget_factor
+
+    # --- NUEVO: Indicador visual de última recarga en memoria ---
+    try:
+        tz = ZoneInfo("America/Santiago")
+        hora_carga = datetime.datetime.now(tz).strftime('%H:%M:%S')
+    except:
+        hora_carga = datetime.datetime.now().strftime('%H:%M:%S')
+    
+    st.sidebar.markdown("---")
+    st.sidebar.caption(f"Última lectura del servidor: {hora_carga}")
     
     tab1, tab2, tab3, tab4 = st.tabs([
         "📊 Análisis por Agrupación", 
@@ -838,4 +863,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
