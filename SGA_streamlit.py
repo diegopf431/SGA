@@ -3,6 +3,7 @@ import plotly.graph_objects as go
 import streamlit as st
 import datetime
 import numpy as np
+import os
 
 # ==============================================================================
 # CONFIGURACIÓN GENERAL
@@ -14,9 +15,9 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- URLs DE SHAREPOINT (Pega los links de "Anyone" aquí) ---
-URL_DATA = "https://empresassk-my.sharepoint.com/personal/tilprafi_magotteaux_com/Documents/Practica%20DP%20fin/Base%20access/data_sga_source.xlsx?web=1" 
-URL_BUDGET = "https://empresassk-my.sharepoint.com/personal/tilprafi_magotteaux_com/Documents/Practica%20DP%20fin/Base%20access/2025%2010%2013%20-%20SGA%20MOD%20-%20V31%20-%20send%201.xlsx?web=1" 
+# --- NOMBRES DE ARCHIVOS ---
+DATA_FILENAME = "data_sga_source.xlsx" 
+BUDGET_FILENAME = "2025 10 13 - SGA MOD - V31 - send 1.xlsx" 
 
 # --- COLORES ---
 COLOR_TOTALS = '#003366'    
@@ -47,22 +48,16 @@ def normalizar_denom3(texto):
     if any(x in t for x in ['OTHER']): return "OTHER"
     return t
 
-def format_sharepoint_url(url):
-    """Fuerza el enlace de SharePoint para que sea de descarga directa."""
-    if "sharepoint.com" in url:
-        if "?" in url:
-            url = url.split("?")[0]
-        return url + "?download=1"
-    return url
+# ==============================================================================
+# 2. CARGA DE DATOS
+# ==============================================================================
+@st.cache_data
+def load_data_from_excel(filename):
+    if not os.path.exists(filename):
+        return None, f"⚠️ No se encuentra el archivo: {filename}"
 
-# ==============================================================================
-# 2. CARGA DE DATOS (CON CONEXIÓN A NUBE Y CACHÉ CON VENCIMIENTO)
-# ==============================================================================
-@st.cache_data(ttl=600) # Se actualiza cada 10 min si hay cambios
-def load_data_from_excel(url):
-    direct_url = format_sharepoint_url(url)
     try:
-        df = pd.read_excel(direct_url, sheet_name='BD_EERR')
+        df = pd.read_excel(filename, sheet_name='BD_EERR')
         df['Fecha_Str'] = df['Year/month'].astype(str).str.replace('.', '/', regex=False)
         df['Fecha'] = pd.to_datetime(df['Fecha_Str'], errors='coerce')
         df['Fecha'] = df['Fecha'].apply(lambda x: x.replace(day=1) if pd.notnull(x) else x)
@@ -72,13 +67,14 @@ def load_data_from_excel(url):
         df = df.sort_values('Fecha')
         return df, "Datos cargados correctamente."
     except Exception as e:
-        return None, f"Error leyendo Excel de Datos desde SharePoint: {e}"
+        return None, f"Error leyendo Excel de Datos: {e}"
 
-@st.cache_data(ttl=3600) # El budget asumo que cambia menos, caché de 1 hora
-def load_budget_excel(url):
-    direct_url = format_sharepoint_url(url)
+@st.cache_data
+def load_budget_excel(filename):
+    if not os.path.exists(filename):
+        return pd.DataFrame(columns=['Desc_Ceco', 'Concepto_Norm', 'Budget_Anual'])
     try:
-        df_ex = pd.read_excel(direct_url, header=5)
+        df_ex = pd.read_excel(filename, header=5)
         col_ceco_name = df_ex.columns[1]
         df_ex = df_ex.dropna(subset=[col_ceco_name])
         if len(df_ex.columns) < 3: return pd.DataFrame()
@@ -96,14 +92,15 @@ def load_budget_excel(url):
         
         return df_melt.groupby(['Desc_Ceco', 'Concepto_Norm'])['Budget_Anual'].sum().reset_index()
     except Exception as e:
-        st.error(f"Error leyendo Budget desde SharePoint: {e}")
+        st.error(f"Error leyendo Budget: {e}")
         return pd.DataFrame(columns=['Desc_Ceco', 'Concepto_Norm', 'Budget_Anual'])
 
-@st.cache_data(ttl=3600)
-def load_ceco_mapping(url):
-    direct_url = format_sharepoint_url(url)
+@st.cache_data
+def load_ceco_mapping(excel_path):
+    if not os.path.exists(excel_path):
+        return {}
     try:
-        df_map = pd.read_excel(direct_url, sheet_name="Ceco")
+        df_map = pd.read_excel(excel_path, sheet_name="Ceco")
         col_den = 'Den Ceco'
         col_agrup = 'Agrup. Ceco'
         
@@ -132,11 +129,11 @@ def load_ceco_mapping(url):
         return mapping_dict
 
     except Exception as e:
-        st.warning(f"No se pudo cargar la pestaña 'Ceco' para agrupación desde SharePoint: {e}")
+        st.warning(f"No se pudo cargar la pestaña 'Ceco' para agrupación: {e}")
         return {}
 
 # ==============================================================================
-# 3. GRÁFICOS (El código de gráficos se mantiene EXACTAMENTE igual)
+# 3. GRÁFICOS
 # ==============================================================================
 def plot_waterfall_generic(labels, wf_values, wf_measures, bar_values, title, is_drilldown=False, simple_bar_mode=False, bar_custom_text=None, val_prior_year=None, label_prior_year="Año Ant"):
     fig = go.Figure()
@@ -284,10 +281,10 @@ def main():
 
     st.title("📉 Dashboard Control SGA")
 
-    with st.spinner('Descargando y procesando datos desde SharePoint...'):
-        df, msg = load_data_from_excel(URL_DATA)
-        df_budgets_db = load_budget_excel(URL_BUDGET)
-        ceco_mapping = load_ceco_mapping(URL_BUDGET)
+    with st.spinner('Procesando datos...'):
+        df, msg = load_data_from_excel(DATA_FILENAME)
+        df_budgets_db = load_budget_excel(BUDGET_FILENAME)
+        ceco_mapping = load_ceco_mapping(BUDGET_FILENAME)
     
     if df is None:
         st.error(msg)
@@ -301,7 +298,7 @@ def main():
         # --- APLICAR MAPEO GENERAL ---
         df['Agrup_Ceco'] = df['Desc_Ceco'].map(ceco_mapping).fillna("SIN AGRUPACION")
         df_budgets_db['Agrup_Ceco'] = df_budgets_db['Desc_Ceco'].map(ceco_mapping).fillna("SIN AGRUPACION")
-        st.success(f"✅ Datos descargados de la nube y listos.")
+        st.success(f"✅ Datos listos.")
 
     st.sidebar.header("🗓️ Filtros")
     years = sorted(df['Fecha'].dt.year.unique())
@@ -825,11 +822,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
-
-
-
