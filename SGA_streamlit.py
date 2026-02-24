@@ -71,7 +71,7 @@ def normalizar_denom3(texto):
 # ==============================================================================
 # 2. CARGA DE DATOS (Con auto-refresh a las 09:05 AM)
 # ==============================================================================
-@st.cache_data(ttl=get_next_sync_ttl())
+@st.cache_data(ttl=43200)
 def load_data_from_excel(filename):
     if not os.path.exists(filename):
         return None, f"⚠️ No se encuentra el archivo: {filename}"
@@ -103,7 +103,7 @@ def load_data_from_excel(filename):
     except Exception as e:
         return None, f"Error leyendo Excel de Datos: {e}"
 
-@st.cache_data(ttl=get_next_sync_ttl())
+@st.cache_data(ttl=43200)
 def load_budget_excel(filename):
     if not os.path.exists(filename):
         return pd.DataFrame(columns=['Desc_Ceco', 'Concepto_Norm', 'Budget_Anual'])
@@ -129,7 +129,7 @@ def load_budget_excel(filename):
         st.error(f"Error leyendo Budget: {e}")
         return pd.DataFrame(columns=['Desc_Ceco', 'Concepto_Norm', 'Budget_Anual'])
 
-@st.cache_data(ttl=get_next_sync_ttl())
+@st.cache_data(ttl=43200)
 def load_ceco_mapping(excel_path):
     if not os.path.exists(excel_path):
         return {}
