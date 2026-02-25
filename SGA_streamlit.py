@@ -4,7 +4,7 @@ import streamlit as st
 import datetime
 import numpy as np
 import os
-from zoneinfo import ZoneInfo  # <-- NUEVA LIBRERÍA (Nativa de Python)
+from zoneinfo import ZoneInfo  
 
 # ==============================================================================
 # CONFIGURACIÓN GENERAL
@@ -34,18 +34,13 @@ MOM_COLOR_BUD = '#F4D03F'
 # 1. FUNCIONES AUXILIARES Y LÓGICA DE CACHE
 # ==============================================================================
 def get_next_sync_ttl():
-    """
-    Calcula los segundos exactos hasta las 09:05 AM (Hora Local)
-    para que el caché expire justo después de que corra el Task Scheduler.
-    """
     try:
-        # Aseguramos la zona horaria de Santiago para coincidir con tu horario
         tz = ZoneInfo("America/Santiago")
         now = datetime.datetime.now(tz)
     except:
         now = datetime.datetime.now()
         
-    sync_time = now.replace(hour=8, minute=35, second=0, microsecond=0)
+    sync_time = now.replace(hour=9, minute=5, second=0, microsecond=0)
     
     if now >= sync_time:
         sync_time += datetime.timedelta(days=1)
@@ -69,9 +64,9 @@ def normalizar_denom3(texto):
     return t
 
 # ==============================================================================
-# 2. CARGA DE DATOS (Con auto-refresh a las 09:05 AM)
+# 2. CARGA DE DATOS
 # ==============================================================================
-@st.cache_data(ttl=43200)
+@st.cache_data(ttl=get_next_sync_ttl())
 def load_data_from_excel(filename):
     if not os.path.exists(filename):
         return None, f"⚠️ No se encuentra el archivo: {filename}"
@@ -103,7 +98,7 @@ def load_data_from_excel(filename):
     except Exception as e:
         return None, f"Error leyendo Excel de Datos: {e}"
 
-@st.cache_data(ttl=43200)
+@st.cache_data(ttl=get_next_sync_ttl())
 def load_budget_excel(filename):
     if not os.path.exists(filename):
         return pd.DataFrame(columns=['Desc_Ceco', 'Concepto_Norm', 'Budget_Anual'])
@@ -129,7 +124,7 @@ def load_budget_excel(filename):
         st.error(f"Error leyendo Budget: {e}")
         return pd.DataFrame(columns=['Desc_Ceco', 'Concepto_Norm', 'Budget_Anual'])
 
-@st.cache_data(ttl=43200)
+@st.cache_data(ttl=get_next_sync_ttl())
 def load_ceco_mapping(excel_path):
     if not os.path.exists(excel_path):
         return {}
@@ -166,7 +161,7 @@ def load_ceco_mapping(excel_path):
         return {}
 
 # ==============================================================================
-# 3. GRÁFICOS (Sin cambios)
+# 3. GRÁFICOS
 # ==============================================================================
 def plot_waterfall_generic(labels, wf_values, wf_measures, bar_values, title, is_drilldown=False, simple_bar_mode=False, bar_custom_text=None, val_prior_year=None, label_prior_year="Año Ant"):
     fig = go.Figure()
@@ -273,33 +268,6 @@ def plot_mom_evolution(df_all, selected_year, total_monthly_budget):
     fig.update_layout(title=f"Evolución Mensual (MoM): {prior_year} vs {selected_year} vs Budget", xaxis_title="Mes", yaxis_title="Gasto ($)", template="plotly_white", height=550, legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
     return fig
 
-def plot_comparison_bars(df_curr, df_prev, year_curr, year_prev, budgets_ceco_adj_series):
-    grp_curr = df_curr.groupby('Desc_Ceco')['Gasto_Real'].sum()
-    grp_prev = df_prev.groupby('Desc_Ceco')['Gasto_Real'].sum()
-    budgets_dict = budgets_ceco_adj_series.to_dict()
-    all_cecos = sorted(list(set(grp_curr.index) | set(grp_prev.index) | set(budgets_dict.keys())))
-    
-    vals_curr = []
-    vals_prev = []
-    vals_bud = []
-    
-    for c in all_cecos:
-        vals_curr.append(grp_curr.get(c, 0.0))
-        vals_prev.append(grp_prev.get(c, 0.0))
-        vals_bud.append(budgets_dict.get(c, 0.0))
-    all_cecos.append("TOTAL")
-    vals_curr.append(sum(vals_curr))
-    vals_prev.append(sum(vals_prev))
-    vals_bud.append(sum(vals_bud))
-    
-    fig = go.Figure()
-    fig.add_trace(go.Bar(x=all_cecos, y=vals_prev, name=str(year_prev), marker_color=MOM_COLOR_PREV, text=[f"${v:,.0f}" for v in vals_prev], textposition='auto', opacity=0.8))
-    fig.add_trace(go.Bar(x=all_cecos, y=vals_curr, name=str(year_curr), marker_color=MOM_COLOR_CURR, text=[f"${v:,.0f}" for v in vals_curr], textposition='auto', opacity=0.9))
-    fig.add_trace(go.Scatter(x=all_cecos, y=vals_bud, name="Budget", mode='lines+markers', line=dict(color=MOM_COLOR_BUD, width=3, dash='dot'), marker=dict(size=10, symbol='diamond', color=MOM_COLOR_BUD), text=[f"${v:,.0f}" for v in vals_bud]))
-    
-    fig.update_layout(title=f"Comparativa Nivel de Gasto: {year_prev} vs {year_curr}", xaxis_title="Centro de Costo", yaxis_title="Gasto ($)", barmode='group', template="plotly_white", height=650, legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
-    return fig
-
 # ==============================================================================
 # MAIN APP
 # ==============================================================================
@@ -365,7 +333,6 @@ def main():
     budgets_agrup_raw = df_budgets_db.groupby('Agrup_Ceco')['Budget_Anual'].sum()
     budgets_agrup_adj = budgets_agrup_raw * budget_factor
 
-    # --- NUEVO: Indicador visual de última recarga en memoria ---
     try:
         tz = ZoneInfo("America/Santiago")
         hora_carga = datetime.datetime.now(tz).strftime('%H:%M:%S')
@@ -375,12 +342,27 @@ def main():
     st.sidebar.markdown("---")
     st.sidebar.caption(f"Última lectura del servidor: {hora_carga}")
     
-    tab1, tab2, tab3, tab4 = st.tabs([
+    # --- PESTAÑAS: SE ELIMINÓ TAB 4 ---
+    tab1, tab2, tab3 = st.tabs([
         "📊 Análisis por Agrupación", 
         "📊 Análisis Variación (Ceco)", 
-        "📈 Evolución MoM", 
-        "📊 Comparativa Anual"
+        "📈 Evolución MoM"
     ])
+
+    def mostrar_kpis(budget, real, prior, prior_label):
+        diff_bud = real - budget
+        pct_bud = (diff_bud / budget * 100) if budget else 0
+        diff_prior = real - prior
+        pct_prior = (diff_prior / prior * 100) if prior else 0
+        
+        lbl_bud_txt = "Ahorro" if diff_bud < 0 else "Exceso"
+        delta_text_bud = f"{pct_bud:.1f}% {lbl_bud_txt}"
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Budget", f"${budget:,.0f}")
+        c2.metric("Real", f"${real:,.0f}", f"{diff_bud:+,.0f}", delta_color="inverse")
+        c3.metric("Var vs Bud", f"{pct_bud:+.1f}%", delta_text_bud, delta_color="inverse")
+        c4.metric(f"Vs {prior_label}", f"{pct_prior:+.1f}%", f"{diff_prior:+,.0f}", delta_color="inverse")
 
     # ==========================================================================
     # TAB 1: ANÁLISIS POR AGRUPACIÓN 
@@ -441,18 +423,9 @@ def main():
             label_prior_year=f"Real {prior_year}"  
         )
 
-        c1a, c2a, c3a, c4a = st.columns(4)
-        c1a.metric("Budget Total (Excel)", f"${total_bud_agrup:,.0f}")
-        c2a.metric("Gasto Real", f"${total_real_agrup:,.0f}", delta=f"{total_real_agrup - total_bud_agrup:+,.0f}", delta_color="inverse")
-        pct_a = ((total_real_agrup - total_bud_agrup) / total_bud_agrup * 100) if total_bud_agrup != 0 else 0
-        lbl_a = "Ahorro" if pct_a < 0 else "Exceso"
-        c3a.metric("Var vs Budget %", f"{pct_a:+.1f}%", delta=f"{pct_a:+.1f}% {lbl_a}", delta_color="inverse")
-        diff_prior_a = total_real_agrup - tot_prior_global_agrup
-        pct_prior_a = (diff_prior_a / tot_prior_global_agrup * 100) if tot_prior_global_agrup != 0 else 0
-        delta_prior_str_a = f"-${abs(diff_prior_a):,.0f}" if diff_prior_a < 0 else f"+${abs(diff_prior_a):,.0f}"
-        c4a.metric(f"Var vs Año Ant. ({prior_year})", f"{pct_prior_a:+.1f}%", delta=delta_prior_str_a, delta_color="inverse")
+        mostrar_kpis(total_bud_agrup, total_real_agrup, tot_prior_global_agrup, str(prior_year))
 
-        selection_agrup = st.plotly_chart(fig_agrup, use_container_width=True, on_select="rerun")
+        selection_agrup = st.plotly_chart(fig_agrup, use_container_width=True, on_select="rerun", key="agrup_main_chart")
 
         clicked_agrup = None
         if selection_agrup and "selection" in selection_agrup and selection_agrup["selection"]["points"]:
@@ -476,10 +449,6 @@ def main():
              total_real_comp = actuals_comp.sum()
              total_bud_comp = budgets_comp_adj.sum()
 
-             diff_prior_comp = total_real_comp - tot_prior_comp
-             pct_prior_comp = (diff_prior_comp / tot_prior_comp * 100) if tot_prior_comp != 0 else 0
-             delta_prior_comp_str = f"-${abs(diff_prior_comp):,.0f}" if diff_prior_comp < 0 else f"+${abs(diff_prior_comp):,.0f}"
-
              wf_c_labels = []
              wf_c_values = []
              wf_c_measures = []
@@ -492,10 +461,7 @@ def main():
                  title_drill = f"Desglose Gasto Real - {clicked_agrup}"
                  is_simple_mode = True
                  
-                 z1, z2, z3 = st.columns(3)
-                 z1.metric("Gasto Real", f"${total_real_comp:,.0f}")
-                 z2.metric(f"Año Ant ({prior_year})", f"${tot_prior_comp:,.0f}")
-                 z3.metric("Var vs Año Ant", f"{pct_prior_comp:+.1f}%", delta=delta_prior_comp_str, delta_color="inverse")
+                 mostrar_kpis(0, total_real_comp, tot_prior_comp, str(prior_year))
 
                  for comp in all_components:
                      act = actuals_comp.get(comp, 0.0)
@@ -521,16 +487,7 @@ def main():
                  title_drill = f"Desglose de {clicked_agrup} por Ceco"
                  is_simple_mode = False
 
-                 diff_comp = total_real_comp - total_bud_comp
-                 pct_comp = (diff_comp / total_bud_comp * 100) if total_bud_comp != 0 else 0
-                 delta_comp_bud_str = f"-${abs(diff_comp):,.0f}" if diff_comp < 0 else f"+${abs(diff_comp):,.0f}"
-
-                 c_d1, c_d2, c_d3, c_d4 = st.columns(4)
-                 c_d1.metric(f"Budget {clicked_agrup}", f"${total_bud_comp:,.0f}")
-                 c_d2.metric(f"Gasto Real", f"${total_real_comp:,.0f}", delta=delta_comp_bud_str, delta_color="inverse")
-                 lbl_comp = "Ahorro" if pct_comp < 0 else "Exceso"
-                 c_d3.metric("Var vs Budget", f"{pct_comp:+.1f}%", delta=f"{pct_comp:+.1f}% {lbl_comp}", delta_color="inverse")
-                 c_d4.metric(f"Var vs {prior_year}", f"{pct_prior_comp:+.1f}%", delta=delta_prior_comp_str, delta_color="inverse")
+                 mostrar_kpis(total_bud_comp, total_real_comp, tot_prior_comp, str(prior_year))
 
                  wf_c_labels.append("Budget Grupo")
                  wf_c_values.append(total_bud_comp)
@@ -572,25 +529,27 @@ def main():
                  val_prior_year=tot_prior_comp,
                  label_prior_year=f"Real {prior_year} (Grupo)"
              )
-             st.plotly_chart(fig_comp, use_container_width=True)
+             st.plotly_chart(fig_comp, use_container_width=True, key="agrup_drill_chart")
 
     # ==========================================================================
-    # TAB 2: WATERFALL & DRILL-DOWN (ORIGINAL POR CECO)
+    # TAB 2: WATERFALL & DRILL-DOWN (ORIGINAL POR CECO) + TABLA TERCER NIVEL
     # ==========================================================================
     with tab2:
-        actuals_ceco = df_filtered.groupby('Desc_Ceco')['Gasto_Real'].sum()
-        all_cecos = sorted(list(set(actuals_ceco.index) | set(budgets_ceco_adj.index)))
-        tot_prior_global = df_filtered_prior['Gasto_Real'].sum()
-        
+        act_ceco = df_filtered.groupby('Desc_Ceco')['Gasto_Real'].sum()
+        all_c = sorted(list(set(act_ceco.index) | set(budgets_ceco_adj.index)))
+        tot_b = budgets_ceco_adj.sum()
+        tot_r = act_ceco.sum()
+        tot_p = df_filtered_prior['Gasto_Real'].sum()
+
         wf1_labels = ["Budget Total"]
-        wf1_values = [budgets_ceco_adj.sum()]
+        wf1_values = [tot_b]
         wf1_measures = ["absolute"]
-        bar_values1 = [budgets_ceco_adj.sum()]
-        bar_text1 = [f"${budgets_ceco_adj.sum():,.0f}"]
+        bar_values1 = [tot_b]
+        bar_text1 = [f"${tot_b:,.0f}"]
         
         intermediates = []
-        for ceco in all_cecos:
-            act = actuals_ceco.get(ceco, 0.0)
+        for ceco in all_c:
+            act = act_ceco.get(ceco, 0.0)
             bud = budgets_ceco_adj.get(ceco, 0.0)
             delta = act - bud
             if abs(delta) > 1: 
@@ -610,45 +569,29 @@ def main():
             bar_values1.append(item['act'])
             bar_text1.append(item['txt'])
                 
-        wf1_labels.append("Real Total")
-        total_real = actuals_ceco.sum()
-        total_bud = budgets_ceco_adj.sum()
-        wf1_values.append(total_real)
+        wf1_labels.append("Total Real")
+        wf1_values.append(tot_r)
         wf1_measures.append("total")
-        bar_values1.append(total_real) 
+        bar_values1.append(tot_r) 
         
-        if total_bud != 0:
-             pct_total = (total_real / total_bud) * 100
-             bar_text1.append(f"${total_real:,.0f}<br><b>({pct_total:.1f}%)</b>") 
+        if tot_b != 0:
+             pct_total = (tot_r / tot_b) * 100
+             bar_text1.append(f"${tot_r:,.0f}<br><b>({pct_total:.1f}%)</b>") 
         else:
-            bar_text1.append(f"${total_real:,.0f}")
+            bar_text1.append(f"${tot_r:,.0f}")
 
         fig_main = plot_waterfall_generic(
             wf1_labels, wf1_values, wf1_measures, bar_values1,
             f"Variación por Centro de Costo ({mode_label})",
             bar_custom_text=bar_text1,
-            val_prior_year=tot_prior_global,       
+            val_prior_year=tot_p,       
             label_prior_year=f"Real {prior_year}"  
         )
 
         st.subheader(f"Análisis Principal: {mode_label}")
-        
-        tot_act = actuals_ceco.sum()
-        diff = tot_act - total_bud
-        pct = (diff / total_bud * 100) if total_bud != 0 else 0
-        diff_prior = tot_act - tot_prior_global
-        pct_prior = (diff_prior / tot_prior_global * 100) if tot_prior_global != 0 else 0
-        
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Budget Total (Excel)", f"${total_bud:,.0f}")
-        c2.metric("Gasto Real", f"${tot_act:,.0f}", delta=f"{diff:+,.0f}", delta_color="inverse")
-        lbl = "Ahorro" if pct < 0 else "Exceso"
-        c3.metric("Var vs Budget %", f"{pct:+.1f}%", delta=f"{pct:+.1f}% {lbl}", delta_color="inverse")
-        lbl_prior = "Mejor" if diff_prior < 0 else "Peor"
-        delta_prior_str = f"-${abs(diff_prior):,.0f}" if diff_prior < 0 else f"+${abs(diff_prior):,.0f}"
-        c4.metric(f"Var vs Año Ant. ({prior_year})", f"{pct_prior:+.1f}%", delta=delta_prior_str, delta_color="inverse")
+        mostrar_kpis(tot_b, tot_r, tot_p, str(prior_year))
 
-        selection = st.plotly_chart(fig_main, use_container_width=True, on_select="rerun")
+        selection = st.plotly_chart(fig_main, use_container_width=True, on_select="rerun", key="ceco_main_chart")
 
         clicked_label = None
         if selection and "selection" in selection and selection["selection"]["points"]:
@@ -656,33 +599,26 @@ def main():
             clicked_label = point["x"]
 
         if clicked_label:
-            if clicked_label in ["Budget Total", "Real Total", f"Real {prior_year}", "Total Real"]:
+            if clicked_label in ["Budget Total", "Total Real", f"Real {prior_year}"]:
                 pass 
-            elif clicked_label == "Real Total" or (clicked_label is None): 
-                 pass 
             
             # --- ZOOM GLOBAL ---
-            if clicked_label == "Real Total":
+            elif clicked_label == "Total Real":
                 st.markdown("---")
                 st.markdown("### 🌎 Zoom Global: Variación por Concepto (Todos los CeCos)")
+                
+                mostrar_kpis(tot_b, tot_r, tot_p, str(prior_year))
                 
                 grp_bud_global_raw = df_budgets_db.groupby('Concepto_Norm')['Budget_Anual'].sum()
                 grp_bud_global_adj = grp_bud_global_raw * budget_factor
                 grp_real_global = df_filtered.groupby('Concepto_Norm')['Gasto_Real'].sum()
                 all_global_concepts = sorted(list(set(grp_real_global.index) | set(grp_bud_global_adj.index)))
                 
-                z1, z2, z3, z4 = st.columns(4)
-                z1.metric("Budget Global", f"${total_bud:,.0f}")
-                z2.metric("Real Global", f"${tot_act:,.0f}")
-                delta_bud_str = f"-${abs(diff):,.0f}" if diff < 0 else f"+${abs(diff):,.0f}"
-                z3.metric("Var vs Budget", f"{pct:+.1f}%", delta=delta_bud_str, delta_color="inverse")
-                z4.metric(f"Var vs {prior_year}", f"{pct_prior:+.1f}%", delta=delta_prior_str, delta_color="inverse")
-                
                 wf2_labels = ["Budget Global"]
-                wf2_values = [total_bud]
+                wf2_values = [tot_b]
                 wf2_measures = ["absolute"]
-                bar_values2 = [total_bud]
-                bar_text2 = [f"${total_bud:,.0f}"]
+                bar_values2 = [tot_b]
+                bar_text2 = [f"${tot_b:,.0f}"]
                 
                 intermediates_global = []
                 for concept in all_global_concepts:
@@ -707,22 +643,51 @@ def main():
                     bar_text2.append(item['txt'])
                 
                 wf2_labels.append("Real Global")
-                wf2_values.append(tot_act)
+                wf2_values.append(tot_r)
                 wf2_measures.append("total")
-                bar_values2.append(tot_act)
-                bar_text2.append(f"${tot_act:,.0f}")
+                bar_values2.append(tot_r)
+                bar_text2.append(f"${tot_r:,.0f}")
                 
                 fig_global = plot_waterfall_generic(
                     wf2_labels, wf2_values, wf2_measures, bar_values2,
                     f"Variación Global por Concepto - {mode_label}", is_drilldown=True,
                     bar_custom_text=bar_text2,
-                    val_prior_year=tot_prior_global,      
+                    val_prior_year=tot_p,      
                     label_prior_year=f"Real {prior_year}" 
                 )
-                st.plotly_chart(fig_global, use_container_width=True)
+                
+                # --- TERCER NIVEL DE ZOOM (TABLA GLOBAL) ---
+                selection_global_drill = st.plotly_chart(fig_global, use_container_width=True, on_select="rerun", key="global_drill_concept")
+                
+                if selection_global_drill and "selection" in selection_global_drill and selection_global_drill["selection"]["points"]:
+                    clicked_concept_global = selection_global_drill["selection"]["points"][0]["x"]
+                    invalid_labels_global = ["Budget Global", "Real Global", f"Real {prior_year}", "Total Real"]
+                    
+                    if clicked_concept_global and clicked_concept_global not in invalid_labels_global:
+                        st.markdown(f"#### 📄 Detalle de Asientos: {clicked_concept_global}")
+                        
+                        df_detail_global = df_filtered[df_filtered['Concepto_Norm'] == clicked_concept_global].copy()
+                        
+                        # Precaución por si las columnas nuevas no están en el excel aún
+                        for col in ['Desc_Cta2', 'Texto1']:
+                            if col not in df_detail_global.columns:
+                                df_detail_global[col] = "No disponible"
+                                
+                        if not df_detail_global.empty:
+                            df_show_global = df_detail_global[['Desc_Ceco', 'Desc_Cta2', 'Texto1', 'Gasto_Real']].copy()
+                            df_show_global = df_show_global.rename(columns={
+                                'Desc_Ceco': 'Ceco', 
+                                'Desc_Cta2': 'Cuenta', 
+                                'Texto1': 'Texto', 
+                                'Gasto_Real': 'Monto ($)'
+                            })
+                            df_show_global = df_show_global.sort_values(by="Monto ($)", ascending=False).reset_index(drop=True)
+                            st.dataframe(df_show_global.style.format({'Monto ($)': '{:,.0f}'}), use_container_width=True)
+                        else:
+                            st.info("No hay transacciones reales para esta cuenta (la variación puede ser puramente de budget).")
 
-            # --- ZOOM CECO ---
-            elif clicked_label != "Budget Total" and clicked_label != f"Real {prior_year}":
+            # --- ZOOM CECO ESPECÍFICO ---
+            else:
                 selected_ceco = clicked_label
                 st.markdown("---")
                 st.markdown(f"### 🔎 Detalle: {selected_ceco}")
@@ -739,9 +704,6 @@ def main():
                 prior_ceco_total = df_ceco_prior['Gasto_Real'].sum() 
                 
                 real_ceco_total = grp_real.sum()
-                diff_prior_ceco = real_ceco_total - prior_ceco_total
-                pct_prior_ceco = (diff_prior_ceco / prior_ceco_total * 100) if prior_ceco_total != 0 else 0
-                delta_prior_ceco_str = f"-${abs(diff_prior_ceco):,.0f}" if diff_prior_ceco < 0 else f"+${abs(diff_prior_ceco):,.0f}"
                 
                 wf2_labels = []
                 wf2_values = []     
@@ -757,10 +719,7 @@ def main():
                     title_drill = f"Desglose Gasto Real - {selected_ceco}"
                     is_simple_mode = True
                     
-                    z1, z2, z3 = st.columns(3)
-                    z1.metric("Gasto Real", f"${real_ceco_total:,.0f}")
-                    z2.metric(f"Año Ant ({prior_year})", f"${prior_ceco_total:,.0f}")
-                    z3.metric("Var vs Año Ant", f"{pct_prior_ceco:+.1f}%", delta=delta_prior_ceco_str, delta_color="inverse")
+                    mostrar_kpis(0, real_ceco_total, prior_ceco_total, str(prior_year))
 
                     for concept in all_concepts:
                         val_real = grp_real.get(concept, 0.0)
@@ -777,25 +736,16 @@ def main():
                         bar_text2.append(item['txt'])
                     
                     wf2_labels.append("Total Real")
-                    wf2_values.append(grp_real.sum())
+                    wf2_values.append(real_ceco_total)
                     wf2_measures.append("total")
-                    bar_values2.append(grp_real.sum())
-                    bar_text2.append(f"${grp_real.sum():,.0f}")
+                    bar_values2.append(real_ceco_total)
+                    bar_text2.append(f"${real_ceco_total:,.0f}")
 
                 else:
                     title_drill = f"Variación vs Budget - {selected_ceco}"
                     is_simple_mode = False
                     
-                    diff_ceco = real_ceco_total - budget_ceco_total
-                    pct_ceco = (diff_ceco / budget_ceco_total * 100) if budget_ceco_total != 0 else 0
-                    delta_ceco_bud_str = f"-${abs(diff_ceco):,.0f}" if diff_ceco < 0 else f"+${abs(diff_ceco):,.0f}"
-                    
-                    c_d1, c_d2, c_d3, c_d4 = st.columns(4)
-                    c_d1.metric(f"Budget {selected_ceco}", f"${budget_ceco_total:,.0f}")
-                    c_d2.metric(f"Gasto Real", f"${real_ceco_total:,.0f}", delta=delta_ceco_bud_str, delta_color="inverse")
-                    lbl_ceco = "Ahorro" if pct_ceco < 0 else "Exceso"
-                    c_d3.metric("Var vs Budget", f"{pct_ceco:+.1f}%", delta=f"{pct_ceco:+.1f}% {lbl_ceco}", delta_color="inverse")
-                    c_d4.metric(f"Var vs {prior_year}", f"{pct_prior_ceco:+.1f}%", delta=delta_prior_ceco_str, delta_color="inverse")
+                    mostrar_kpis(budget_ceco_total, real_ceco_total, prior_ceco_total, str(prior_year))
                     
                     wf2_labels.append("Budget Ceco")
                     wf2_values.append(budget_ceco_total)
@@ -825,10 +775,10 @@ def main():
                         bar_text2.append(item['txt'])
                     
                     wf2_labels.append("Real Ceco")
-                    wf2_values.append(grp_real.sum())
+                    wf2_values.append(real_ceco_total)
                     wf2_measures.append("total")
-                    bar_values2.append(grp_real.sum())
-                    bar_text2.append(f"${grp_real.sum():,.0f}")
+                    bar_values2.append(real_ceco_total)
+                    bar_text2.append(f"${real_ceco_total:,.0f}")
                 
                 fig_drill = plot_waterfall_generic(
                     wf2_labels, wf2_values, wf2_measures, bar_values2,
@@ -837,7 +787,34 @@ def main():
                     val_prior_year=prior_ceco_total,       
                     label_prior_year=f"Real {prior_year}"  
                 )
-                st.plotly_chart(fig_drill, use_container_width=True)
+                
+                # --- TERCER NIVEL DE ZOOM (TABLA CECO ESPECÍFICO) ---
+                selection_ceco_drill = st.plotly_chart(fig_drill, use_container_width=True, on_select="rerun", key=f"ceco_drill_{selected_ceco}")
+                
+                if selection_ceco_drill and "selection" in selection_ceco_drill and selection_ceco_drill["selection"]["points"]:
+                    clicked_concept = selection_ceco_drill["selection"]["points"][0]["x"]
+                    invalid_labels = ["Budget Ceco", "Real Ceco", f"Real {prior_year}", "Total Real"]
+                    
+                    if clicked_concept and clicked_concept not in invalid_labels:
+                        st.markdown(f"#### 📄 Detalle de Asientos: {clicked_concept}")
+                        
+                        df_detail = df_ceco_real[df_ceco_real['Concepto_Norm'] == clicked_concept].copy()
+                        
+                        for col in ['Desc_Cta2', 'Texto1']:
+                            if col not in df_detail.columns:
+                                df_detail[col] = "No disponible"
+                                
+                        if not df_detail.empty:
+                            df_show = df_detail[['Desc_Cta2', 'Texto1', 'Gasto_Real']].copy()
+                            df_show = df_show.rename(columns={
+                                'Desc_Cta2': 'Cuenta', 
+                                'Texto1': 'Texto', 
+                                'Gasto_Real': 'Monto ($)'
+                            })
+                            df_show = df_show.sort_values(by="Monto ($)", ascending=False).reset_index(drop=True)
+                            st.dataframe(df_show.style.format({'Monto ($)': '{:,.0f}'}), use_container_width=True)
+                        else:
+                            st.info("No hay transacciones reales para esta cuenta en este CECO (la variación puede ser puramente de budget).")
 
     # ==========================================================================
     # TAB 3: EVOLUCIÓN MOM
@@ -847,17 +824,6 @@ def main():
         budget_mensual_promedio = budgets_ceco_raw.sum() / 12.0
         fig_mom = plot_mom_evolution(df, selected_year, budget_mensual_promedio)
         st.plotly_chart(fig_mom, use_container_width=True)
-
-    # ==========================================================================
-    # TAB 4: COMPARATIVA ANUAL 
-    # ==========================================================================
-    with tab4:
-        st.subheader(f"Nivel de Gasto: {prior_year} vs {selected_year}")
-        if df_filtered.empty and df_filtered_prior.empty:
-            st.warning("No hay datos disponibles para comparar.")
-        else:
-            fig_comp = plot_comparison_bars(df_filtered, df_filtered_prior, selected_year, prior_year, budgets_ceco_adj)
-            st.plotly_chart(fig_comp, use_container_width=True)
 
     st.sidebar.markdown("<br><br><br>", unsafe_allow_html=True)
 
