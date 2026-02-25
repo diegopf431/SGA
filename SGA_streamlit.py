@@ -45,7 +45,7 @@ def get_next_sync_ttl():
     except:
         now = datetime.datetime.now()
         
-    sync_time = now.replace(hour=9, minute=5, second=0, microsecond=0)
+    sync_time = now.replace(hour=8, minute=35, second=0, microsecond=0)
     
     if now >= sync_time:
         sync_time += datetime.timedelta(days=1)
