@@ -342,7 +342,6 @@ def main():
     st.sidebar.markdown("---")
     st.sidebar.caption(f"Última lectura del servidor: {hora_carga}")
     
-    # --- PESTAÑAS: SE ELIMINÓ TAB 4 ---
     tab1, tab2, tab3 = st.tabs([
         "📊 Análisis por Agrupación", 
         "📊 Análisis Variación (Ceco)", 
@@ -668,7 +667,6 @@ def main():
                         
                         df_detail_global = df_filtered[df_filtered['Concepto_Norm'] == clicked_concept_global].copy()
                         
-                        # Precaución por si las columnas nuevas no están en el excel aún
                         for col in ['Desc_Cta2', 'Texto1']:
                             if col not in df_detail_global.columns:
                                 df_detail_global[col] = "No disponible"
@@ -821,6 +819,15 @@ def main():
     # ==========================================================================
     with tab3:
         st.subheader("Evolución Mensual Comparativa")
+        
+        # --- NUEVO: Agregar los KPIs globales a esta pestaña ---
+        tot_b_mom = budgets_ceco_adj.sum()
+        tot_r_mom = df_filtered['Gasto_Real'].sum()
+        tot_p_mom = df_filtered_prior['Gasto_Real'].sum()
+        mostrar_kpis(tot_b_mom, tot_r_mom, tot_p_mom, str(prior_year))
+        
+        st.markdown("<br>", unsafe_allow_html=True)
+        
         budget_mensual_promedio = budgets_ceco_raw.sum() / 12.0
         fig_mom = plot_mom_evolution(df, selected_year, budget_mensual_promedio)
         st.plotly_chart(fig_mom, use_container_width=True)
